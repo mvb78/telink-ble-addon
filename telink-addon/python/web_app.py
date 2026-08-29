@@ -10,17 +10,23 @@ All commands route daemon-first (try /tmp/telink-ble.sock, fall back to direct B
 import asyncio
 import datetime
 import os
+import sys
 import threading
 
 from flask import Flask, jsonify, render_template, request
 
 import group_registry as group_registry
 import lamp_registry as registry
-from config import CHAR_NOTIFY_UUID, SCAN_TIMEOUT
+from config import CHAR_NOTIFY_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
 from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, run_on_lamp
 
 app = Flask(__name__)
+
+
+def _log(msg: str) -> None:
+    """Write a line to stderr so it appears in `ha apps logs` (flushed)."""
+    print(f"[web] {msg}", file=sys.stderr, flush=True)
 
 # ── discovery state ──────────────────────────────────────────────────────
 
@@ -161,21 +167,26 @@ def api_discover():
     def _worker():
         _discovery["running"] = True
         _discovery["result"] = None
+        _log("discover: starting scan and probe")
         try:
             loop = asyncio.new_event_loop()
             devices = loop.run_until_complete(scan_for_telink_lamps(timeout=SCAN_TIMEOUT))
+            _log(f"discover: scan returned {len(devices)} Telink device(s)")
             lamps = registry.load()
             found = 0
             for dev in devices:
                 pw = loop.run_until_complete(probe_lamp(dev["mac"], dev["name"]))
+                _log(f"discover: probe {dev['mac']} ({dev['name']}) -> password={pw}")
                 if pw:
                     lamps = registry.upsert(lamps, dev["mac"], dev["name"], pw)
                     found += 1
             registry.save(lamps)
             _discovery["result"] = {"found": found, "total_devices": len(devices)}
+            _log(f"discover: done, found={found}, total={len(devices)}")
             loop.close()
         except Exception as e:
             _discovery["result"] = {"error": str(e)}
+            _log(f"discover: ERROR {e!r}")
         finally:
             _discovery["running"] = False
 

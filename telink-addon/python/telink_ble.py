@@ -4,6 +4,8 @@ import os
 import socket
 from bleak import BleakClient, BleakScanner
 
+import sys
+
 from config import (
     SERVICE_UUID,
     CHAR_COMMAND_UUID,
@@ -326,14 +328,20 @@ async def scan_for_telink_lamps(timeout: float = 15.0) -> list[dict]:
     """
     found = {}
 
+    def _log(msg: str) -> None:
+        print(f"[ble] {msg}", file=sys.stderr, flush=True)
+
     def callback(device, adv):
         uuids = [str(u).lower() for u in (adv.service_uuids or [])]
         has_service_uuid = SERVICE_UUID.lower() in uuids
         has_telink_mfr = VENDOR_ID in (adv.manufacturer_data or {})
         if (has_service_uuid or has_telink_mfr) and device.address.upper() not in found:
             found[device.address.upper()] = device.name or device.address
+            _log(f"scan: candidate {device.address} ({device.name}) svc={has_service_uuid} mfr={has_telink_mfr}")
 
+    _log(f"scan: starting BleakScanner (timeout={timeout}s)")
     async with BleakScanner(callback) as scanner:
         await asyncio.sleep(timeout)
+    _log(f"scan: finished, raw candidates={len(found)}")
 
     return [{"mac": mac, "name": name} for mac, name in found.items()]
