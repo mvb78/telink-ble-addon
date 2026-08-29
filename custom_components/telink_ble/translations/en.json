@@ -1,0 +1,36 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Telink BLE add-on connection",
+        "description": "Enter the host and port where the Telink BLE CLI add-on web UI is reachable (it listens on TCP 8099). In Home Assistant OS this is usually the machine's LAN IP.",
+        "data": {
+          "host": "Host (IP or hostname)",
+          "port": "Port"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This add-on is already configured."
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Telink add-on. Check the host/port and that the add-on is running."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Telink BLE options",
+        "description": "Connection and polling settings. Lowering the poll interval refreshes lamp state faster but polls the add-on more often.",
+        "data": {
+          "host": "Host (IP or hostname)",
+          "port": "Port",
+          "poll_interval": "Poll interval (seconds, min 5)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not reach the Telink add-on. Check the host/port and that the add-on is running."
+    }
+  }
+}

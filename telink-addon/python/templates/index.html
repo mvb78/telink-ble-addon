@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telink BLE Lamps</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <h1>Telink Lamps</h1>
+
+    <h2>Lamps</h2>
+    <button id="discover-btn">Discover lamps</button>
+    <ul id="lamp-list"></ul>
+
+    <h2>Groups</h2>
+    <form id="group-create">
+      <input id="group-name" placeholder="new group name" required>
+      <button type="submit" title="Create group">+</button>
+    </form>
+    <ul id="group-list"></ul>
+  </aside>
+
+  <main id="main">
+    <header>
+      <div id="target-info">
+        <span id="target-label">All lamps</span>
+        <span id="target-sub">every saved lamp</span>
+      </div>
+      <select id="target-selector">
+        <option value="all">All</option>
+      </select>
+      <span id="daemon-status" title="checking...">
+        <span class="dot"></span><span class="text">daemon</span>
+      </span>
+    </header>
+
+    <section class="panel power-panel">
+      <button id="btn-all-on" class="big on" data-cmd="on">ON</button>
+      <button id="btn-all-off" class="big off" data-cmd="off">OFF</button>
+    </section>
+
+    <section class="panel">
+      <h3>Brightness</h3>
+      <div class="row slider-row">
+        <input type="range" id="brightness-slider" min="0" max="100" value="50">
+        <output id="brightness-val">50%</output>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h3>White temperature</h3>
+      <div class="row slider-row">
+        <span class="slider-cap warm">&#9728;</span>
+        <input type="range" id="ct-slider" min="0" max="100" value="50">
+        <span class="slider-cap cool">&#10052;</span>
+        <output id="ct-val">50</output>
+      </div>
+      <div class="hint">slide, then press Apply</div>
+      <button class="cmd apply-ct" data-cmd="colortemp">Apply white</button>
+    </section>
+
+    <section class="panel">
+      <h3>Color</h3>
+      <div class="row">
+        <input type="color" id="rgb-picker" value="#ff0000">
+        <div id="swatches"></div>
+      </div>
+      <button class="cmd apply-rgb" data-cmd="rgb">Apply color</button>
+    </section>
+
+    <section class="panel" id="membership-panel" hidden>
+      <h3>Group membership <small>(selected lamp)</small></h3>
+      <div id="membership-list"></div>
+      <div class="hint">tick to add the lamp to a group, untick to remove</div>
+    </section>
+
+    <section class="panel">
+      <h3>Scenes</h3>
+      <div class="row">
+        <select id="scene-id"></select>
+        <button class="cmd" data-cmd="scene">Recall</button>
+        <button class="cmd" data-cmd="scene-add">Save current as</button>
+        <button class="cmd" data-cmd="scene-del">Delete</button>
+        <button class="cmd danger" data-cmd="scene-clear">Clear all</button>
+      </div>
+    </section>
+
+    <details class="panel" id="advanced">
+      <summary><h3>Advanced</h3></summary>
+      <div class="row">
+        <label>Cycle speed</label>
+        <input type="range" id="cycle-speed" min="0" max="255" value="100">
+        <button class="cmd" data-cmd="cycle">Start cycle</button>
+      </div>
+      <div class="row">
+        <button class="cmd" data-cmd="status">Query status</button>
+        <button class="cmd" data-cmd="gettime">Read clock</button>
+        <button class="cmd" data-cmd="time">Sync clock</button>
+        <button class="cmd" data-cmd="fwver">Firmware</button>
+      </div>
+      <div class="row">
+        <button class="cmd danger" data-cmd="reset">Soft reset</button>
+        <button class="cmd danger" data-cmd="kick">Kick from mesh</button>
+      </div>
+      <div id="query-results"></div>
+    </details>
+
+    <section class="panel" id="log-panel">
+      <h3>Log</h3>
+      <pre id="log-output"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "domain": "telink_ble",
+  "name": "Telink BLE Lights",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/mvb78/telink-ble-addon",
+  "issue_tracker": "https://github.com/mvb78/telink-ble-addon/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@mvb78"],
+  "iot_class": "local_polling",
+  "integration_type": "device"
+}

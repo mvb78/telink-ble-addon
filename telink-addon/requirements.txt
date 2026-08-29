@@ -1,0 +1,4 @@
+bleak==0.22.2
+pycryptodome==3.20.0
+flask>=3.0
+waitress>=3.0
