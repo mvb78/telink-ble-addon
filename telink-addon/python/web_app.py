@@ -24,6 +24,11 @@ from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, run_on_lamp
 app = Flask(__name__)
 
 
+@app.before_request
+def _log_request():
+    _log(f"HTTP {request.method} {request.path}")
+
+
 def _log(msg: str) -> None:
     """Write a line to stderr so it appears in `ha apps logs` (flushed)."""
     print(f"[web] {msg}", file=sys.stderr, flush=True)
