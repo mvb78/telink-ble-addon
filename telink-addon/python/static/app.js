@@ -84,7 +84,7 @@ async function sendCmd(cmd, extra) {
   const body = { ...cmdBody(), ...extra };
   const label = activeTarget ? activeTarget.name || targetLabel.textContent : "All lamps";
   log(`→ ${cmd} → ${label}`);
-  const res = await api(`/api/command/${cmd}`, body);
+  const res = await api(`api/command/${cmd}`, body);
   log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || JSON.stringify(res)}`);
   if (res.results) renderQueryResults(res.results);
   return res;
@@ -93,7 +93,7 @@ async function sendCmd(cmd, extra) {
 // ── sidebar: lamps ───────────────────────────────────────────────────────
 
 async function loadLamps() {
-  lamps = await api("/api/lamps") || [];
+  lamps = await api("api/lamps") || [];
   lampList.innerHTML = "";
 
   const liAll = document.createElement("li");
@@ -145,14 +145,14 @@ function selectLamp(l) {
 async function quickToggle(lamp, stateOn) {
   const body = { mac: lamp.mac };
   log(`→ ${stateOn ? "on" : "off"} → ${lamp.name || lamp.mac}`);
-  const res = await api(`/api/command/${stateOn ? "on" : "off"}`, body);
+  const res = await api(`api/command/${stateOn ? "on" : "off"}`, body);
   log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || ""}`);
 }
 
 // ── sidebar: groups ──────────────────────────────────────────────────────
 
 async function loadGroups() {
-  groups = await api("/api/groups") || [];
+  groups = await api("api/groups") || [];
   groupList.innerHTML = "";
   groups.forEach((g) => {
     const li = document.createElement("li");
@@ -174,7 +174,7 @@ async function loadGroups() {
     del.onclick = async (e) => {
       e.stopPropagation();
       if (!confirm(`Delete group '${g.name}'?`)) return;
-      await api(`/api/groups/${encodeURIComponent(g.name)}`, undefined, "DELETE");
+      await api(`api/groups/${encodeURIComponent(g.name)}`, undefined, "DELETE");
       log(`deleted group '${g.name}'`);
       if (activeTarget?.type === "group" && activeTarget.name === g.name)
         setTarget(null, "All lamps", "every saved lamp");
@@ -195,7 +195,7 @@ groupCreateForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const name = groupNameInput.value.trim();
   if (!name) return;
-  const res = await api("/api/groups", { name });
+  const res = await api("api/groups", { name });
   if (res.error) log(`ERROR: ${res.error}`);
   else log(`created group '${res.name}' @ 0x${res.address.toString(16).toUpperCase()}`);
   groupNameInput.value = "";
@@ -227,7 +227,7 @@ function renderMembership() {
 }
 
 async function toggleMembership(group, add) {
-  const path = `/api/groups/${encodeURIComponent(group.name)}/${add ? "add" : "remove"}`;
+  const path = `api/groups/${encodeURIComponent(group.name)}/${add ? "add" : "remove"}`;
   const res = await api(path, { mac: activeTarget.mac });
   log(`${add ? "added to" : "removed from"} group '${group.name}': ${res.ok ? "OK" : res.error || "FAILED"}`);
 }
@@ -321,7 +321,7 @@ function renderQueryResults(results) {
 // ── daemon status ────────────────────────────────────────────────────────
 
 async function pollDaemon() {
-  const s = await api("/api/daemon");
+  const s = await api("api/daemon");
   const el = $("daemon-status");
   el.classList.toggle("up", !!s.running);
   el.classList.toggle("down", !s.running);
@@ -338,10 +338,10 @@ discoverBtn.addEventListener("click", async () => {
   discoverBtn.disabled = true;
   discoverBtn.textContent = "Scanning\u2026 (45 s)";
   log("Discovery started — this takes ~45 seconds");
-  await api("/api/discover", {});
+  await api("api/discover", {});
 
   const poll = setInterval(async () => {
-    const s = await api("/api/discover/status");
+    const s = await api("api/discover/status");
     if (!s.running) {
       clearInterval(poll);
       discoverBtn.disabled = false;
