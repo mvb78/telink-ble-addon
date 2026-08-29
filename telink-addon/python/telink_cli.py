@@ -94,11 +94,13 @@ def _try_daemon_query(opcode: int, params: bytes, response_opcode: int,
 
     The daemon holds the BLE connections, so a direct query would collide with
     it (a Telink lamp allows only one connection). Returns the daemon's
-    {"ok": bool, "results": [{"mac","name","payload":[...]}, ...], "msg": str}
-    so the caller can decode notifications without opening its own connection.
+    {"ok": bool, "results": [...], "msg": str, "daemon": bool} so the caller can
+    decode notifications without opening its own connection. "daemon" is True
+    when the daemon socket was present, so callers can tell an "all lamps
+    offline" report from "no daemon running".
     """
     if not os.path.exists(DAEMON_SOCK):
-        return {"ok": False, "results": [], "msg": "daemon not running"}
+        return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
     req: dict = {"kind": "query", "opcode": opcode, "params": list(params),
                  "response_opcode": response_opcode, "selector": selector}
     if mac:
@@ -118,12 +120,14 @@ def _try_daemon_query(opcode: int, params: bytes, response_opcode: int,
         resp = json.loads(data)
         if resp.get("status") == "ok":
             return {"ok": True, "results": resp.get("results", []),
-                    "msg": (resp.get("errors") or ["all lamps responded"])[0] if resp.get("errors") else "OK (daemon)"}
-        return {"ok": False, "results": [], "msg": resp.get("msg", "query failed")}
+                    "msg": (resp.get("errors") or ["all lamps responded"])[0] if resp.get("errors") else "OK (daemon)",
+                    "daemon": True}
+        return {"ok": False, "results": [], "msg": resp.get("msg", "query failed"),
+                "daemon": True}
     except (ConnectionRefusedError, FileNotFoundError):
-        return {"ok": False, "results": [], "msg": "daemon not running"}
+        return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
     except Exception as e:
-        return {"ok": False, "results": [], "msg": str(e)}
+        return {"ok": False, "results": [], "msg": str(e), "daemon": True}
 
 
 async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int = BROADCAST):

@@ -125,7 +125,10 @@ def _query_route(opcode, params, response_opcode, parse_fn, targets, data):
 
     Direct queries collide with the daemon because a Telink lamp allows only one
     active connection. The daemon proxies queries over its socket; this decodes
-    its returned payloads, falling back to direct connect when no daemon runs.
+    its returned payloads. When the daemon is running, we NEVER fall back to a
+    direct connect scan: that would both collide with the daemon's live
+    connections and take ~30-60s per absent lamp (scan timeout). Instead we
+    surface per-lamp offline markers so callers see the lamps as down fast.
     """
     mac = data.get("mac")
     dq = _try_daemon_query(opcode, params, response_opcode,
@@ -139,7 +142,16 @@ def _query_route(opcode, params, response_opcode, parse_fn, targets, data):
                 parsed = f"parse error: {e}"
             out.append({"lamp": r["name"], "result": parsed})
         return out
-    # Daemon unavailable / failed — fall back to direct connect per lamp.
+    # Daemon socket present but query failed (lamps asleep/offline).
+    if dq.get("daemon") is True:
+        out = []
+        for t in targets:
+            out.append({
+                "lamp": t["name"],
+                "result": {"error": f"{t['mac']} offline (daemon)"},
+            })
+        return out
+    # No daemon running at all — fall back to a direct connect per lamp.
     return _run_async(_query(opcode, params, response_opcode, parse_fn, targets))
 
 

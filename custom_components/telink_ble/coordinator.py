@@ -53,9 +53,11 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._session = session
 
     # -- low-level requests -------------------------------------------------
-    async def _request(self, method: str, path: str, json: dict | None = None) -> Any:
+    async def _request(
+        self, method: str, path: str, json: dict | None = None, total: float = 20
+    ) -> Any:
         url = f"{self._base_url}{path}"
-        timeout = aiohttp.ClientTimeout(total=20)
+        timeout = aiohttp.ClientTimeout(total=total)
         try:
             async with self._session.request(
                 method, url, json=json, timeout=timeout
@@ -68,39 +70,57 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Add-on request timed out for {path}") from err
 
     async def get_lamps(self) -> list[dict]:
-        data = await self._request("GET", API_LAMPS)
+        data = await self._request("GET", API_LAMPS, total=10)
         return data if isinstance(data, list) else []
 
     async def get_groups(self) -> list[dict]:
-        data = await self._request("GET", API_GROUPS)
+        data = await self._request("GET", API_GROUPS, total=10)
         return data if isinstance(data, list) else []
 
     async def get_status_all(self) -> list[dict]:
-        data = await self._request("POST", API_STATUS_ALL, json={})
+        data = await self._request("POST", API_STATUS_ALL, json={}, total=75)
         results = data.get("results") if isinstance(data, dict) else []
         return results if isinstance(results, list) else []
 
     async def send_command(self, path: str, payload: dict) -> bool:
-        data = await self._request("POST", path, json=payload)
+        data = await self._request("POST", path, json=payload, total=20)
         return isinstance(data, dict) and bool(data.get("ok"))
 
     # -- coordinator ---------------------------------------------------------
     async def _async_update_data(self) -> dict[str, Any]:
-        lamps = await self.get_lamps()
-        groups = await self.get_groups()
-        statuses = await self.get_status_all()
+        # Individual add-on endpoints may fail (or hang) when the Telink lamps
+        # are asleep / not advertising. Rather than fail the whole update (which
+        # would trip the config entry into setup_retry), degrade gracefully:
+        # keep last-known lamps/groups and mark entities unavailable.
+        try:
+            lamps = await self.get_lamps()
+        except UpdateFailed:
+            lamps = (self.data or {}).get("lamps", [])
+        try:
+            groups = await self.get_groups()
+        except UpdateFailed:
+            groups = (self.data or {}).get("groups", [])
 
         by_mac: dict[str, dict] = {}
-        for item in statuses:
-            entry = item.get("result")
-            mac = item.get("mac")
-            if mac and isinstance(entry, dict):
-                by_mac[mac.lower()] = entry
+        try:
+            statuses = await self.get_status_all()
+            for item in statuses:
+                entry = item.get("result")
+                mac = item.get("mac")
+                if mac and isinstance(entry, dict):
+                    by_mac[mac.lower()] = entry
+        except UpdateFailed:
+            _LOGGER.debug("Telink status poll failed; lamps likely offline")
 
-        daemon = await self._request("GET", API_DAEMON)
+        try:
+            daemon = await self._request("GET", API_DAEMON, total=10)
+            connected = _as_bool(daemon.get("running"))
+        except UpdateFailed:
+            connected = (self.data or {}).get("connected", False)
+
         return {
             "lamps": lamps,
             "groups": groups,
             "status": by_mac,
-            "connected": _as_bool(daemon.get("running")),
+            "connected": connected,
         }
