@@ -19,7 +19,7 @@ import group_registry as group_registry
 import lamp_registry as registry
 from config import CHAR_NOTIFY_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
-from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, cmd_assign_addr, run_on_lamp
+from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, cmd_assign_addr, run_on_lamp
 
 app = Flask(__name__)
 
@@ -514,6 +514,33 @@ def api_inspect_address():
         if mac:
             r["expected_address"] = expected.get(mac)
     return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/lamp/read-status", methods=["POST"])
+def api_lamp_read_status():
+    """GATT-read the status characteristic (0d1913) on live daemon connections.
+
+    This is a plain GATT read that needs no HCI-monitor notification capture,
+    so it works inside the add-on. The lamp's returned bytes can reveal the
+    current on/off state and (in some Telink builds) per-lamp identity.
+    """
+    data = request.get_json() or {}
+    mac = data.get("mac")
+    selector = data.get("selector", "all")
+    dr = _try_daemon_read(mac=mac, selector=selector)
+    if not dr["ok"]:
+        return jsonify({"ok": False, "msg": dr["msg"], "results": [], "daemon": dr["daemon"]})
+    out = []
+    for r in dr["results"]:
+        payload = bytes(r["payload"])
+        out.append({
+            "mac": r["mac"],
+            "name": r["name"],
+            "hex": payload.hex(),
+            "len": len(payload),
+        })
+    _log(f"read-status: {len(out)} result(s)")
+    return jsonify({"ok": True, "msg": dr["msg"], "results": out, "daemon": True})
 
 
 if __name__ == "__main__":

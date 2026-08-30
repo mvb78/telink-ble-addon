@@ -26,6 +26,7 @@ import sys
 
 import lamp_registry as registry
 from telink_ble import TelinkController
+from config import CHAR_STATUS_UUID
 
 SOCK_PATH = "/tmp/telink-ble.sock"
 PID_PATH = "/tmp/telink-ble.pid"
@@ -106,6 +107,20 @@ class DaemonSession:
             self._last_cmd_time = asyncio.get_event_loop().time()
             return pkt
 
+    async def read_status(self) -> bytes | None:
+        """Read the lamp's status characteristic (0d1913) over the live session.
+
+        The status char has 'read' + write-WoR properties and no notify, so we
+        can read the lamp's current state directly without needing the HCI
+        monitor (which is unavailable inside the add-on container).
+        """
+        async with self._lock:
+            if not self.ctrl.client or not self.ctrl.client.is_connected:
+                await self._reconnect()
+            data = await self.ctrl.client.read_gatt_char(CHAR_STATUS_UUID)
+            self._last_cmd_time = asyncio.get_event_loop().time()
+            return bytes(data)
+
     async def _reconnect(self):
         saved_seq = self.ctrl.seq_manager
         try:
@@ -182,6 +197,29 @@ async def _handle_client(
 
         if not targets:
             resp = {"status": "error", "msg": "no matching lamps"}
+        elif req.get("kind") == "read":
+            # GATT read of the status characteristic over the live session.
+            results = []
+            errors = []
+            for sess in targets:
+                try:
+                    val = await sess.read_status()
+                    if val:
+                        results.append({
+                            "mac": sess.lamp["mac"],
+                            "name": sess.lamp["name"],
+                            "payload": list(val),
+                        })
+                    else:
+                        errors.append(f"{sess.lamp['name']}: no status value")
+                except Exception as e:
+                    errors.append(f"{sess.lamp['name']}: {e}")
+            if results:
+                resp = {"status": "ok", "results": results,
+                        "errors": errors if errors else None}
+            else:
+                resp = {"status": "error",
+                        "msg": "; ".join(errors) if errors else "no responses"}
         elif req.get("kind") == "query":
             # Query commands respond per-lamp; collect each session's answer.
             response_opcode = req.get("response_opcode", 0xDB)

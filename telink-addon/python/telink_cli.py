@@ -130,7 +130,40 @@ def _try_daemon_query(opcode: int, params: bytes, response_opcode: int,
         return {"ok": False, "results": [], "msg": str(e), "daemon": True}
 
 
-async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int = BROADCAST):
+def _try_daemon_read(mac: str | None = None, selector: str = "all"):
+    """
+    Ask the daemon to GATT-read the status characteristic (0d1913) on its live
+    connections. Returns {"ok": bool, "results": [{"mac","name","payload"}],
+    "msg": str, "daemon": bool}. Unlike the encrypted mesh query, this is a
+    plain GATT read that needs no HCI-monitor notification capture.
+    """
+    if not os.path.exists(DAEMON_SOCK):
+        return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
+    req: dict = {"kind": "read", "selector": selector}
+    if mac:
+        req["mac"] = mac
+    try:
+        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+        sock.settimeout(10.0)
+        sock.connect(DAEMON_SOCK)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        sock.close()
+        resp = json.loads(data)
+        if resp.get("status") == "ok":
+            return {"ok": True, "results": resp.get("results", []),
+                    "msg": "OK (daemon read)", "daemon": True}
+        return {"ok": False, "results": [], "msg": resp.get("msg", "read failed"),
+                "daemon": True}
+    except (ConnectionRefusedError, FileNotFoundError):
+        return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
+    except Exception as e:
+        return {"ok": False, "results": [], "msg": str(e), "daemon": True}
     ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
     try:
         await ctrl.connect()
