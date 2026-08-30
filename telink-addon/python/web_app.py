@@ -238,6 +238,28 @@ def api_debug_scan():
     return jsonify({"ok": True, "results": results})
 
 
+@app.route("/api/lamp/<mac>/creds", methods=["POST"])
+def api_lamp_creds(mac):
+    """Update a lamp's stored mesh login name & password in the registry.
+
+    Point the daemon at the credentials the lamp physically currently uses
+    (e.g. factory `Smart_mesh`/`8888`) without re-provisioning firmware.
+    """
+    data = request.get_json(silent=True) or {}
+    name = data.get("name")
+    password = data.get("password")
+    if not name or not password:
+        return jsonify({"ok": False, "msg": "name and password required"}), 400
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if not lamp:
+        return jsonify({"ok": False, "msg": f"lamp {mac} not in registry"}), 404
+    registry.upsert(lamps, lamp["mac"], name, password)
+    registry.save(lamps)
+    _log(f"creds {mac}: now {name}/{password}")
+    return jsonify({"ok": True, "msg": f"{mac} creds -> {name}/{password}"})
+
+
 # ── lamp API ─────────────────────────────────────────────────────────────
 
 @app.route("/api/lamps")
