@@ -278,8 +278,11 @@ class TelinkController:
                 if remaining > 0.5 and self.client and self.client.is_connected:
                     try:
                         raw = bytes(await self.client.read_gatt_char(CHAR_NOTIFY_UUID))
-                    except Exception:
+                    except Exception as e:
+                        print(f"  [read1911] error: {e}", flush=True)
                         raw = b""
+                    if raw:
+                        print(f"  [read1911] got {len(raw)}B {raw.hex()}", flush=True)
                     if raw and self.session_key:
                         plain = decrypt_notification(self.session_key, raw, self.mac_bytes)
                         if plain and plain[7] == opcode:
