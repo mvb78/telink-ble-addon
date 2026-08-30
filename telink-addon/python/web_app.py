@@ -266,6 +266,7 @@ def api_lamp_provision(mac):
     name = data.get("name", "Smart_qXsx")
     password = data.get("password", "1234")
     current_name = data.get("current_name")
+    current_password = data.get("current_password")
     if addr is None:
         return jsonify({"ok": False, "msg": "addr required"}), 400
     try:
@@ -278,7 +279,7 @@ def api_lamp_provision(mac):
         _run_sync(lambda: _stop_daemon())
         open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
 
-    ok, msg = _run_async(_provision_direct(mac, addr, name, password, current_name))
+    ok, msg = _run_async(_provision_direct(mac, addr, name, password, current_name, current_password))
     if ok:
         lamps = registry.load()
         registry.upsert(lamps, mac.upper(), name, password, mesh_address=addr)
@@ -288,11 +289,12 @@ def api_lamp_provision(mac):
     return jsonify({"ok": ok, "msg": msg, "daemon_paused": True})
 
 
-async def _provision_direct(mac, addr, name, password, current_name=None):
+async def _provision_direct(mac, addr, name, password, current_name=None, current_password=None):
     """Replicate provision_lamp.py's APK flow, adapted to run in-container.
 
-    `current_name` is the name the lamp currently advertises/keys with (used to
-    log in when its credentials drifted, e.g. back to the MAC-string default).
+    `current_name`/`current_password` are the credentials the lamp currently keys
+    with (used to log in when its credentials drifted, e.g. back to the MAC-string
+    default). If omitted, the new `name`/`password` are used for login too.
     """
     try:
         import provision_lamp as pl
@@ -306,9 +308,10 @@ async def _provision_direct(mac, addr, name, password, current_name=None):
         if not device:
             return False, f"{mac} not found (daemon held/still down?)"
         login_name = current_name if current_name else name
+        login_password = current_password if current_password else password
         from bleak import BleakClient
         async with BleakClient(device.address) as client:
-            session_key = await pl.apk_login(client, login_name, password)
+            session_key = await pl.apk_login(client, login_name, login_password)
             params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
             from telink_mesh import SequenceManager, build_mesh_packet
             from telink_crypto import encrypt_packet
