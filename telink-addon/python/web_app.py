@@ -791,6 +791,57 @@ def api_debug_login():
     return jsonify({"ok": True, "result": _run_async(_probe())})
 
 
+@app.route("/api/debug/bootstrap-login", methods=["POST"])
+def api_debug_bootstrap_login():
+    """Bootstrap (fixed R_APP) login probe for out-of-mesh/unprovisioned nodes.
+
+    Mirrors the bootstrap used by the APK: fixed nonce R_APP=A0..A7 with
+    base_key derived from the given name/password. The response first byte is
+    0x0d on auth-OK and sample_s verification tells us the password is right —
+    without doing any destructive provisioning writes. Caller must pause the
+    daemon first.
+    """
+    body = request.get_json(silent=True) or {}
+    mac = (body.get("mac") or "").upper()
+    name = body.get("name", "Smart_qXsx")
+    password = body.get("password", "1234")
+    if not mac:
+        return jsonify({"ok": False, "msg": "mac required"}), 400
+
+    async def _probe():
+        from bleak import BleakScanner, BleakClient
+        from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
+        from config import CHAR_PAIR_UUID
+        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        if not device:
+            return {"ok": False, "msg": f"{mac} not found"}
+        out = {"mac": mac, "advertised": device.name,
+               "tried_name": f"{name!r}", "tried_password": f"{password!r}"}
+        R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
+        base_key = derive_base_key(name, password)
+        challenge = build_challenge(base_key, R_APP)
+        payload = bytearray(17)
+        payload[0] = 0x0C
+        payload[1:9] = R_APP
+        payload[9:17] = challenge
+        async with BleakClient(device.address) as client:
+            await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
+            await asyncio.sleep(0.6)
+            rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+            if not rsp:
+                out["response"] = "NO RESPONSE"
+                return out
+            out["response_hex"] = rsp.hex()
+            out["response_byte"] = f"0x{rsp[0]:02x}"
+            if rsp[0] == 0x0D and len(rsp) >= 17:
+                r2 = bytes(rsp[1:9])
+                sample_s = bytes(rsp[9:17])
+                out["sample_s_ok"] = verify_sample_s(name, password, r2, sample_s)
+            return out
+
+    return jsonify({"ok": True, "result": _run_async(_probe())})
+
+
 if __name__ == "__main__":
     import os as _os
     _host = _os.environ.get("TELINK_WEB_HOST", "0.0.0.0")
