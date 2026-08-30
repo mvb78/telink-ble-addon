@@ -842,6 +842,77 @@ def api_debug_bootstrap_login():
     return jsonify({"ok": True, "result": _run_async(_probe())})
 
 
+@app.route("/api/debug/bruteforce", methods=["POST"])
+def api_debug_bruteforce():
+    """Try many (name, password) login combos against a lamp in ONE connection.
+
+    Holds a single BLE connection and issues repeated 0x0C login challenges
+    (random r1), so we avoid the ~5s reconnect cost per attempt. On a 0x0D
+    response we verify sample_s to confirm the password is genuinely correct.
+    Supports both the standard random-r1 login (random_r1=true, default) and the
+    fixed bootstrap R_APP flavour. Caller must pause the daemon first.
+    """
+    body = request.get_json(silent=True) or {}
+    mac = (body.get("mac") or "").upper()
+    names = body.get("names", [])
+    passwords = body.get("passwords", [])
+    random_r1 = bool(body.get("random_r1", True))
+    if not mac or not names or not passwords:
+        return jsonify({"ok": False, "msg": "mac, names[], passwords[] required"}), 400
+
+    async def _run():
+        from bleak import BleakScanner, BleakClient
+        from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
+        import os as _os
+        from config import CHAR_PAIR_UUID
+        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        if not device:
+            return {"ok": False, "msg": f"{mac} not found"}
+        R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
+        total = len(names) * len(passwords)
+        tried = 0
+        results = {"mac": mac, "advertised": device.name, "flavour": "R_APP" if not random_r1 else "random_r1",
+                   "attempts": total}
+        async with BleakClient(device.address) as client:
+            for name in names:
+                for password in passwords:
+                    tried += 1
+                    try:
+                        base_key = derive_base_key(name, password)
+                        r1 = _os.urandom(8) if random_r1 else R_APP
+                        challenge = build_challenge(base_key, r1)
+                        payload = bytearray(17)
+                        payload[0] = 0x0C
+                        payload[1:9] = r1
+                        payload[9:17] = challenge
+                        await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
+                        await asyncio.sleep(0.4)
+                        rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+                        if rsp and rsp[0] == 0x0D and len(rsp) >= 17:
+                            r2 = bytes(rsp[1:9])
+                            sample_s = bytes(rsp[9:17])
+                            ok = verify_sample_s(name, password, r2, sample_s)
+                            results["found"] = {"name": name, "password": password,
+                                                "sample_s_ok": ok, "tried": tried}
+                            results["done"] = True
+                            return results
+                    except Exception as e:
+                        # Connection dropped mid-try: reconnect and continue.
+                        try:
+                            await client.disconnect()
+                        except Exception:
+                            pass
+                        try:
+                            await client.connect()
+                        except Exception as ce:
+                            return {"ok": False, "msg": f"reconnect failed: {ce}", "tried": tried}
+        results["done"] = True
+        results["found"] = None
+        return results
+
+    return jsonify({"ok": True, "result": _run_async(_run())})
+
+
 if __name__ == "__main__":
     import os as _os
     _host = _os.environ.get("TELINK_WEB_HOST", "0.0.0.0")
