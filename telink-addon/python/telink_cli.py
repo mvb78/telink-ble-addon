@@ -164,6 +164,7 @@ async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
     params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
     if _try_daemon(0xE0, params, "all", lamp["mac"], 0, expected_count=1):
         registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
+        registry.save(lamps)
         return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via daemon"
     ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
     try:
@@ -176,6 +177,7 @@ async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
         registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
+        registry.save(lamps)
         return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via direct connect"
     except Exception as e:
         return False, f"[{lamp['name']}] FAILED: {e}"
