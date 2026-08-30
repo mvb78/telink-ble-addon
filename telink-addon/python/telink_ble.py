@@ -51,6 +51,12 @@ _HCI_DEV_NONE    = 0xFFFF
 _HCI_CHANNEL_MONITOR = 2
 
 
+def _get_errno() -> int:
+    """Return the last errno set by libc."""
+    _libc.__errno_location.restype = ctypes.POINTER(ctypes.c_int)
+    return _libc.__errno_location().contents.value
+
+
 def _open_hci_monitor() -> socket.socket | None:
     """
     Open a read-only HCI_CHANNEL_MONITOR socket (same as btmon uses).
@@ -61,15 +67,18 @@ def _open_hci_monitor() -> socket.socket | None:
     """
     try:
         sock = socket.socket(_AF_BLUETOOTH, socket.SOCK_RAW, _BTPROTO_HCI)
-        addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
-        ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
-        if ret != 0:
-            sock.close()
-            return None
-        sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
-        return sock
-    except Exception:
+    except Exception as e:
+        print(f"  [hci] socket(): {e!r} erru={_get_errno()}", flush=True)
         return None
+    addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
+    ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
+    if ret != 0:
+        err = _get_errno()
+        print(f"  [hci] bind() failed errno={err} ({os.strerror(err)})", flush=True)
+        sock.close()
+        return None
+    sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
+    return sock
 
 
 class TelinkController:
