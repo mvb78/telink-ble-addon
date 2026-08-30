@@ -134,7 +134,33 @@ async function loadLamps() {
     offBtn.title = `Turn OFF ${label}`;
     offBtn.onclick = (e) => { e.stopPropagation(); quickToggle(l, false); };
 
-    li.append(name, onBtn, offBtn);
+    const addrInput = document.createElement("input");
+    addrInput.type = "number";
+    addrInput.min = "1";
+    addrInput.max = "63";
+    addrInput.value = l.mesh_address ?? "";
+    addrInput.placeholder = "addr";
+    addrInput.title = "Unicast mesh address (1-63). Leave the lamp advertising, then click Assign.";
+    addrInput.className = "mini-addr";
+    addrInput.onclick = (e) => e.stopPropagation();
+
+    const assignBtn = document.createElement("button");
+    assignBtn.className = "mini assign";
+    assignBtn.textContent = l.mesh_address ? "re-assign" : "assign";
+    assignBtn.title = "Provision this lamp with the given unicast mesh address (opcode 0xE0)";
+    assignBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const addrVal = parseInt(addrInput.value, 10);
+      if (!addrVal || addrVal < 1 || addrVal > 63) {
+        log("ERROR: mesh address must be 1-63");
+        return;
+      }
+      const res = await api(`api/lamp/${l.mac}/assign-addr`, { addr: addrVal });
+      log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || ""}`);
+      if (res.ok) loadLamps();
+    };
+
+    li.append(name, onBtn, offBtn, addrInput, assignBtn);
     lampList.appendChild(li);
 
     const opt = document.createElement("option");

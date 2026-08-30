@@ -19,7 +19,7 @@ import group_registry as group_registry
 import lamp_registry as registry
 from config import CHAR_NOTIFY_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
-from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, run_on_lamp
+from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, cmd_assign_addr, run_on_lamp
 
 app = Flask(__name__)
 
@@ -181,6 +181,17 @@ def api_daemon():
 @app.route("/api/lamps")
 def api_lamps():
     return jsonify(registry.load() or [])
+
+
+@app.route("/api/lamp/<mac>/assign-addr", methods=["POST"])
+def api_lamp_assign_addr(mac):
+    data = request.get_json(silent=True) or {}
+    addr = data.get("addr")
+    if addr is None:
+        return jsonify({"ok": False, "msg": "addr required"}), 400
+    ok, msg = _run_async(cmd_assign_addr(mac, int(addr)))
+    _log(f"assign-addr {mac} -> {addr}: {msg}")
+    return jsonify({"ok": ok, "msg": msg})
 
 
 @app.route("/api/discover", methods=["POST"])

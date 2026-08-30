@@ -150,13 +150,15 @@ async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int 
         await ctrl.disconnect()
 
 
-async def cmd_assign_addr(mac: str, addr: int):
-    """Assign a unicast mesh address to one lamp (opcode 0xE0) and persist it."""
+async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
+    """Assign a unicast mesh address to one lamp (opcode 0xE0) and persist it.
+
+    Returns (ok, message) so both the CLI and the web UI can surface the result.
+    """
     lamps = registry.load()
     lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
     if not lamp:
-        print(f"Lamp {mac} not in lamps.json — run 'discover' first.")
-        return
+        return False, f"Lamp {mac} not in lamps.json — run 'discover' first."
     ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
     try:
         await ctrl.connect()
@@ -169,9 +171,9 @@ async def cmd_assign_addr(mac: str, addr: int):
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
         registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
-        print(f"  [{lamp['name']}] assigned mesh address {addr} (0x{addr:04x})")
+        return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x})"
     except Exception as e:
-        print(f"  [{lamp['name']}] FAILED: {e}")
+        return False, f"[{lamp['name']}] FAILED: {e}"
     finally:
         await ctrl.disconnect()
 
@@ -537,7 +539,8 @@ async def main():
         if mac is None or not values:
             print("Usage: assign-addr --mac <AA:BB:CC:DD:EE:FF> <1-63>")
             return
-        await cmd_assign_addr(mac, values[0])
+        ok, msg = await cmd_assign_addr(mac, values[0])
+        print(msg)
         return
 
     lamps = registry.load()
