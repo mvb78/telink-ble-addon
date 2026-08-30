@@ -10,7 +10,6 @@ from config import (
     SERVICE_UUID,
     CHAR_COMMAND_UUID,
     CHAR_NOTIFY_UUID,
-    CHAR_STATUS_UUID,
     CHAR_PAIR_UUID,
     KNOWN_PASSWORDS,
     VENDOR_ID,
@@ -52,34 +51,26 @@ _HCI_DEV_NONE    = 0xFFFF
 _HCI_CHANNEL_MONITOR = 2
 
 
-def _get_errno() -> int:
-    """Return the last errno set by libc."""
-    _libc.__errno_location.restype = ctypes.POINTER(ctypes.c_int)
-    return _libc.__errno_location().contents.value
-
-
 def _open_hci_monitor() -> socket.socket | None:
     """
     Open a read-only HCI_CHANNEL_MONITOR socket (same as btmon uses).
-    Requires CAP_NET_ADMIN.  Returns None if permission denied.
+    Requires CAP_NET_ADMIN.  Returns None if permission denied (as it does
+    inside HAOS add-on containers, where raw AF_BLUETOOTH sockets are denied).
 
     To use without sudo:
       sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f .venv/bin/python3)
     """
     try:
         sock = socket.socket(_AF_BLUETOOTH, socket.SOCK_RAW, _BTPROTO_HCI)
-    except Exception as e:
-        print(f"  [hci] socket(): {e!r} erru={_get_errno()}", flush=True)
+        addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
+        ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
+        if ret != 0:
+            sock.close()
+            return None
+        sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
+        return sock
+    except Exception:
         return None
-    addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
-    ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
-    if ret != 0:
-        err = _get_errno()
-        print(f"  [hci] bind() failed errno={err} ({os.strerror(err)})", flush=True)
-        sock.close()
-        return None
-    sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
-    return sock
 
 
 class TelinkController:
@@ -273,21 +264,7 @@ class TelinkController:
                 if pkt[7] == opcode:
                     return pkt
             except asyncio.TimeoutError:
-                # Queue empty — the HCI-monitor path may be unavailable (e.g. inside a
-                # container).  Fall back to GATT-reading the notify/status characteristic
-                # through the live connection, which works without a raw HCI socket.
-                if remaining > 0.5 and self.client and self.client.is_connected:
-                    for c_uuid, cname in ((CHAR_STATUS_UUID, "1913"), (CHAR_NOTIFY_UUID, "1911")):
-                        try:
-                            raw = bytes(await self.client.read_gatt_char(c_uuid))
-                        except Exception as e:
-                            print(f"  [read{cname}] error: {e}", flush=True)
-                            continue
-                        print(f"  [read{cname}] got {len(raw)}B {raw.hex()}", flush=True)
-                        if raw and self.session_key:
-                            plain = decrypt_notification(self.session_key, raw, self.mac_bytes)
-                            if plain and plain[7] == opcode:
-                                return plain
+                continue  # keep polling until outer deadline expires
         return None
 
     async def drain_notifications(self, duration: float = 4.0) -> list[bytes]:
