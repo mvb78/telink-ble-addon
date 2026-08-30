@@ -78,8 +78,14 @@ while true; do
     echo "[run] web process exited unexpectedly"
     stop_all TERM
   fi
-  [ -n "$DAEMON_PID" ] && ! kill -0 "$DAEMON_PID" 2>/dev/null && \
-    { [ -f "$PAUSED" ] && echo "[run] daemon stopped and paused — holding" || \
-      { echo "[run] daemon exited; restarting in 5s" && sleep 5 && start_daemon; }; }
+  if { [ -z "$DAEMON_PID" ] || ! kill -0 "$DAEMON_PID" 2>/dev/null; }; then
+    if [ -f "$PAUSED" ]; then
+      echo "[run] daemon stopped and paused — holding"
+    else
+      echo "[run] daemon not running; starting in 5s"
+      sleep 5
+      start_daemon
+    fi
+  fi
   sleep 2
 done
