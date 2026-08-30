@@ -10,6 +10,7 @@ from config import (
     SERVICE_UUID,
     CHAR_COMMAND_UUID,
     CHAR_NOTIFY_UUID,
+    CHAR_STATUS_UUID,
     CHAR_PAIR_UUID,
     KNOWN_PASSWORDS,
     VENDOR_ID,
@@ -276,17 +277,17 @@ class TelinkController:
                 # container).  Fall back to GATT-reading the notify/status characteristic
                 # through the live connection, which works without a raw HCI socket.
                 if remaining > 0.5 and self.client and self.client.is_connected:
-                    try:
-                        raw = bytes(await self.client.read_gatt_char(CHAR_NOTIFY_UUID))
-                    except Exception as e:
-                        print(f"  [read1911] error: {e}", flush=True)
-                        raw = b""
-                    if raw:
-                        print(f"  [read1911] got {len(raw)}B {raw.hex()}", flush=True)
-                    if raw and self.session_key:
-                        plain = decrypt_notification(self.session_key, raw, self.mac_bytes)
-                        if plain and plain[7] == opcode:
-                            return plain
+                    for c_uuid, cname in ((CHAR_STATUS_UUID, "1913"), (CHAR_NOTIFY_UUID, "1911")):
+                        try:
+                            raw = bytes(await self.client.read_gatt_char(c_uuid))
+                        except Exception as e:
+                            print(f"  [read{cname}] error: {e}", flush=True)
+                            continue
+                        print(f"  [read{cname}] got {len(raw)}B {raw.hex()}", flush=True)
+                        if raw and self.session_key:
+                            plain = decrypt_notification(self.session_key, raw, self.mac_bytes)
+                            if plain and plain[7] == opcode:
+                                return plain
         return None
 
     async def drain_notifications(self, duration: float = 4.0) -> list[bytes]:
