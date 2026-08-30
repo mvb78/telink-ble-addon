@@ -85,8 +85,8 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     packet_address = dst if dst is not None else BROADCAST
     if _try_daemon(opcode, params, selector, send_mac, packet_address, expected_count=expected):
         return True, "OK (daemon)"
-    await run_on_lamp(targets[0], opcode, params, packet_address)
-    return True, "OK (direct)"
+    ok = await run_on_lamp(targets[0], opcode, params, packet_address)
+    return (True, "OK (direct)") if ok else (False, "direct connect failed")
 
 
 async def _query(opcode, params, response_opcode, parse_fn, targets):

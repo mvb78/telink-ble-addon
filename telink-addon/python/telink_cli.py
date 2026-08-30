@@ -142,8 +142,10 @@ async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int 
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
         print(f"  [{lamp['name']}] OK")
+        return True
     except Exception as e:
         print(f"  [{lamp['name']}] FAILED: {e}")
+        return False
     finally:
         await ctrl.disconnect()
 
