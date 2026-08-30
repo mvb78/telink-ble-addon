@@ -484,6 +484,38 @@ def api_status():
     return jsonify({"ok": True, "results": results})
 
 
+@app.route("/api/command/inspect-address", methods=["POST"])
+def api_inspect_address():
+    """Read-only: report each lamp's ACTUAL mesh source address as seen in its own
+    0xDB status response (bytes [5:7], little-endian), plus what lamps.json thinks.
+
+    A status query is harmless (read-only); the daemon proxies it so we never
+    collide with its live connections. This is how we verify what address the
+    lamp firmware actually has after provisioning (0x0000 = unassigned).
+    """
+    data = request.get_json() or {}
+    targets = _get_targets(data)
+    if not targets:
+        return jsonify({"ok": False, "msg": "No targets"})
+
+    def parse_inspect(pkt):
+        src_addr = pkt[5] | (pkt[6] << 8)
+        return {
+            "raw": pkt.hex(),
+            "src_address": f"0x{src_addr:04x}",
+        }
+
+    results = _query_route(0xDA, bytes([0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0]), 0xDB,
+                           parse_inspect, targets, data)
+    # Attach expected address from registry for easy comparison.
+    expected = {l["mac"]: l.get("mesh_address") for l in registry.load()}
+    for r in results:
+        mac = next((t["mac"] for t in targets if t["name"] == r.get("lamp")), None)
+        if mac:
+            r["expected_address"] = expected.get(mac)
+    return jsonify({"ok": True, "results": results})
+
+
 if __name__ == "__main__":
     import os as _os
     _host = _os.environ.get("TELINK_WEB_HOST", "0.0.0.0")
