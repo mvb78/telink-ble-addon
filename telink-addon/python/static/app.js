@@ -77,7 +77,9 @@ function syncSelector() {
 function cmdBody() {
   if (!activeTarget) return {};
   if (activeTarget.type === "lamp") return { mac: activeTarget.mac };
-  return { addr: activeTarget.address };
+  // Group commands target a mesh destination address (`dst`), not a lamp
+  // mesh filter (`addr`). The add-on treats `addr` as a lamp-selector.
+  return { dst: activeTarget.address };
 }
 
 async function sendCmd(cmd, extra) {
