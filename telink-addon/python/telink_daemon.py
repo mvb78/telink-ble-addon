@@ -188,8 +188,8 @@ async def _handle_client(
         line = await asyncio.wait_for(reader.readline(), timeout=5.0)
         req = json.loads(line.decode())
 
-        opcode = req["opcode"]
-        params = bytes(req["params"])
+        opcode = req.get("opcode")
+        params = bytes(req["params"]) if "params" in req else b""
         address = req.get("address", 0xFFFF)
         selector = req.get("selector", "all")
         mac = req.get("mac")
