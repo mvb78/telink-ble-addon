@@ -886,7 +886,7 @@ def api_debug_bruteforce():
                         payload[1:9] = r1
                         payload[9:17] = challenge
                         await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
-                        await asyncio.sleep(0.4)
+                        await asyncio.sleep(0.12)
                         rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
                         if rsp and rsp[0] == 0x0D and len(rsp) >= 17:
                             r2 = bytes(rsp[1:9])
