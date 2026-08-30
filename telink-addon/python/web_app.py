@@ -80,8 +80,9 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     elif mac is not None:
         selector, send_mac, expected = "all", mac, 1
     else:
-        # Broadcast to all: the daemon sends on every connected session.
-        selector, send_mac, expected = "all", None, len(targets)
+        # Broadcast to all: the mesh fabric relays ONE packet to every member,
+        # so any connected session is enough; we accept whatever the daemon did.
+        selector, send_mac, expected = "all", None, None
     # Packet destination: explicit group dst wins; then unicast to a single
     # provisioned lamp's own mesh address (so one lamp ≠ all lamps); else broadcast.
     if dst is not None:
