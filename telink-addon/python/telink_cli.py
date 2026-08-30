@@ -150,6 +150,32 @@ async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int 
         await ctrl.disconnect()
 
 
+async def cmd_assign_addr(mac: str, addr: int):
+    """Assign a unicast mesh address to one lamp (opcode 0xE0) and persist it."""
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if not lamp:
+        print(f"Lamp {mac} not in lamps.json — run 'discover' first.")
+        return
+    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+    try:
+        await ctrl.connect()
+        await ctrl.login()
+        seq = ctrl.seq_manager.next()
+        params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
+        p1, p2 = build_redundant_packet(seq, 0, 0xE0, params)
+        await ctrl.send_packet(p1)
+        await asyncio.sleep(0.4)
+        await ctrl.send_packet(p2)
+        await asyncio.sleep(0.5)
+        registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
+        print(f"  [{lamp['name']}] assigned mesh address {addr} (0x{addr:04x})")
+    except Exception as e:
+        print(f"  [{lamp['name']}] FAILED: {e}")
+    finally:
+        await ctrl.disconnect()
+
+
 async def run_on_all(targets: list[dict], opcode: int, params: bytes, unicast: bool = False):
     """Connect to each lamp individually; use unicast to its mesh address or broadcast."""
     for lamp in targets:
@@ -507,6 +533,13 @@ async def main():
             print(f"Error: {e}")
         return
 
+    if command == "assign-addr":
+        if mac is None or not values:
+            print("Usage: assign-addr --mac <AA:BB:CC:DD:EE:FF> <1-63>")
+            return
+        await cmd_assign_addr(mac, values[0])
+        return
+
     lamps = registry.load()
     if not lamps:
         print("No lamps saved. Run 'discover' first.")
@@ -533,8 +566,16 @@ async def main():
     # Packet destination address:
     #   --dst: explicit mesh destination (e.g. group address 0x8000+)
     #   --addr: unicast destination to that lamp mesh address
+    #   --mac (single, provisioned): unicast to that lamp's own mesh address
     #   default: mesh broadcast
-    packet_address = dst if dst is not None else (addr if addr is not None else BROADCAST)
+    if dst is not None:
+        packet_address = dst
+    elif addr is not None:
+        packet_address = addr
+    elif mac is not None and len(targets) == 1 and targets[0].get("mesh_address"):
+        packet_address = int(targets[0]["mesh_address"])
+    else:
+        packet_address = BROADCAST
 
     # For explicit --dst, one relay lamp is enough to inject the packet into mesh.
     relay_targets = targets

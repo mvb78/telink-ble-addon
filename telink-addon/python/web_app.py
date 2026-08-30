@@ -82,7 +82,14 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     else:
         # Broadcast to all: the daemon sends on every connected session.
         selector, send_mac, expected = "all", None, len(targets)
-    packet_address = dst if dst is not None else BROADCAST
+    # Packet destination: explicit group dst wins; then unicast to a single
+    # provisioned lamp's own mesh address (so one lamp ≠ all lamps); else broadcast.
+    if dst is not None:
+        packet_address = dst
+    elif mac is not None and len(targets) == 1 and targets[0].get("mesh_address"):
+        packet_address = int(targets[0]["mesh_address"])
+    else:
+        packet_address = BROADCAST
     if _try_daemon(opcode, params, selector, send_mac, packet_address, expected_count=expected):
         return True, "OK (daemon)"
     ok = await run_on_lamp(targets[0], opcode, params, packet_address)
