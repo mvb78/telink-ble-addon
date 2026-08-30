@@ -210,6 +210,33 @@ def api_daemon_resume():
     return {"ok": True}
 
 
+@app.route("/api/debug/scan", methods=["POST"])
+def api_debug_scan():
+    """Read-only: raw BLE scan returning every advertisement (name + MAC + RSSI).
+
+    No registry changes, no connects. Used to discover what name a lamp advertises
+    when its credentials drifted (e.g. lamps 1 & 4 unreachable after re-provision).
+    Caller should pause the daemon first so the single-connection lamps aren't held.
+    """
+    body = request.get_json(silent=True) or {}
+    timeout = float(body.get("timeout", 10))
+
+    async def _scan():
+        from bleak import BleakScanner
+        devs = {}
+        def cb(device, adv):
+            addr = device.address.upper()
+            rssi = getattr(adv, "rssi", None) or getattr(device, "rssi", None)
+            name = device.name or adv.local_name or ""
+            devs.setdefault(addr, {"mac": addr, "name": name, "rssi": rssi})
+        async with BleakScanner(cb) as s:
+            await asyncio.sleep(timeout)
+        return list(devs.values())
+
+    results = _run_async(_scan())
+    return jsonify({"ok": True, "results": results})
+
+
 # ── lamp API ─────────────────────────────────────────────────────────────
 
 @app.route("/api/lamps")
