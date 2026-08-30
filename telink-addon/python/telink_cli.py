@@ -164,6 +164,9 @@ def _try_daemon_read(mac: str | None = None, selector: str = "all"):
         return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
     except Exception as e:
         return {"ok": False, "results": [], "msg": str(e), "daemon": True}
+
+
+async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int = BROADCAST):
     ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
     try:
         await ctrl.connect()
