@@ -75,8 +75,11 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     if not targets:
         return False, "No targets"
     if dst is not None:
-        # Explicit mesh destination: one relay lamp injects the packet.
-        selector, send_mac, expected = "all", targets[0]["mac"], 1
+        # Explicit mesh destination: one working relay lamp injects the packet.
+        # Prefer a lamp that is currently provisioned in the mesh (current
+        # `Smart_mesh`/`8888` creds) over e.g. a broken/out-of-mesh head.
+        relay = next((t for t in targets if t.get("password") == "8888"), targets[0])
+        selector, send_mac, expected = "all", relay["mac"], 1
     elif mac is not None:
         selector, send_mac, expected = "all", mac, 1
     else:
