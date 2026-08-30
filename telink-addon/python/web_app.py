@@ -266,6 +266,9 @@ def api_group_add_lamp(name):
         return jsonify({"error": f"lamp {mac} not found"}), 404
     p = bytes([0x01, addr & 0xFF, (addr >> 8) & 0xFF])
     ok, msg = _run_async(_execute(0xD7, p, targets))
+    if ok:
+        group_registry.add_member(group, mac)
+        group_registry.save(groups)
     return jsonify({"ok": ok, "msg": msg})
 
 
@@ -286,6 +289,9 @@ def api_group_remove_lamp(name):
         return jsonify({"error": f"lamp {mac} not found"}), 404
     p = bytes([0x00, addr & 0xFF, (addr >> 8) & 0xFF])
     ok, msg = _run_async(_execute(0xD7, p, targets))
+    if ok:
+        group_registry.remove_member(group, mac)
+        group_registry.save(groups)
     return jsonify({"ok": ok, "msg": msg})
 
 

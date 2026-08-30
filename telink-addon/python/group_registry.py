@@ -4,7 +4,8 @@ Persists human-friendly mesh group names in groups.json.
 Schema per entry:
   {
     "name": "top-lights",
-    "address": 32768
+    "address": 32768,
+    "lamps": ["AA:BB:CC:DD:EE:FF"]  # MACs of lamps subscribed to this group (optional)
   }
 
 Address range:
@@ -48,12 +49,23 @@ def _normalize_address(value) -> int:
     return value
 
 
+def _normalize_mac(value) -> str:
+    if not isinstance(value, str):
+        raise Exception(f"Invalid lamp MAC in group: {value!r}")
+    mac = value.strip().upper()
+    if len(mac) < 8 or ":" not in mac:
+        raise Exception(f"Invalid lamp MAC in group: {value!r}")
+    return mac
+
+
 def _normalize_entry(entry: dict) -> dict:
     if not isinstance(entry, dict):
         raise Exception(f"Invalid group entry: {entry!r}")
     name = _normalize_name(entry.get("name", ""))
     addr = _normalize_address(entry.get("address"))
-    return {"name": name, "address": addr}
+    lamps_raw = entry.get("lamps") or []
+    lamps = sorted({_normalize_mac(m) for m in lamps_raw}) if isinstance(lamps_raw, list) else []
+    return {"name": name, "address": addr, "lamps": lamps}
 
 
 def load() -> list[dict]:
@@ -115,7 +127,7 @@ def create(groups: list[dict], name: str) -> tuple[list[dict], dict]:
         )
 
     addr = _next_free_address(groups)
-    created = {"name": normalized_name, "address": addr}
+    created = {"name": normalized_name, "address": addr, "lamps": []}
     return groups + [created], created
 
 
@@ -133,7 +145,26 @@ def print_table(groups: list[dict]) -> None:
     if not groups:
         print("  (no groups)")
         return
-    print(f"  {'Name':<24} {'Address':<8} {'Hex'}")
-    print(f"  {'-'*24} {'-'*8} {'-'*6}")
+    print(f"  {'Name':<24} {'Address':<8} {'Hex':<6} {'Lamps'}")
+    print(f"  {'-'*24} {'-'*8} {'-'*6} {'-'*20}")
     for group in sorted(groups, key=lambda g: g["address"]):
-        print(f"  {group['name']:<24} {group['address']:<8} {group['address']:#06x}")
+        lamps = ", ".join(group.get("lamps") or []) or "-"
+        print(f"  {group['name']:<24} {group['address']:<8} {group['address']:#06x}  {lamps}")
+
+
+def add_member(group: dict, mac: str) -> bool:
+    normalized = _normalize_mac(mac)
+    lamps = group.setdefault("lamps", [])
+    if normalized in lamps:
+        return False
+    lamps.append(normalized)
+    return True
+
+
+def remove_member(group: dict, mac: str) -> bool:
+    normalized = _normalize_mac(mac)
+    lamps = group.setdefault("lamps", [])
+    if normalized in lamps:
+        lamps.remove(normalized)
+        return True
+    return False

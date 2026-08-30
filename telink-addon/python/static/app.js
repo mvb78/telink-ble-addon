@@ -13,6 +13,11 @@ const groupCreateForm = $("group-create");
 const groupNameInput = $("group-name");
 const membershipPanel = $("membership-panel");
 const membershipList = $("membership-list");
+const groupEditPanel = $("group-edit-panel");
+const groupEditName = $("group-edit-name");
+const groupMembers = $("group-members");
+const groupAddLamp = $("group-add-lamp");
+const groupAddBtn = $("group-add-btn");
 const queryResults = $("query-results");
 
 let lamps = [];
@@ -204,14 +209,23 @@ groupCreateForm.addEventListener("submit", async (e) => {
   loadGroups();
 });
 
-// ── group membership panel (single lamp selected) ────────────────────────
+// ── group membership (lamp view) & members (group view) ──────────────────
+
+function macLabel(mac) {
+  const l = lamps.find((x) => x.mac === mac);
+  return l ? (l.name || l.mac) : mac;
+}
 
 function renderMembership() {
-  if (!activeTarget || activeTarget.type !== "lamp") {
-    membershipPanel.hidden = true;
-    return;
-  }
+  if (activeTarget?.type === "lamp") { renderLampMembership(); return; }
+  if (activeTarget?.type === "group") { renderGroupEdit(); return; }
+  membershipPanel.hidden = true;
+  groupEditPanel.hidden = true;
+}
+
+function renderLampMembership() {
   membershipPanel.hidden = false;
+  groupEditPanel.hidden = true;
   membershipList.innerHTML = "";
   if (!groups.length) {
     membershipList.innerHTML = `<span class="hint">no groups defined — create one in the sidebar</span>`;
@@ -222,17 +236,92 @@ function renderMembership() {
     row.className = "member-row";
     const cb = document.createElement("input");
     cb.type = "checkbox";
+    cb.checked = (g.lamps || []).includes(activeTarget.mac);
     cb.onchange = () => toggleMembership(g, cb.checked);
-    row.append(cb, document.createTextNode(g.name));
+    const span = document.createElement("span");
+    span.textContent = g.name;
+    const count = document.createElement("small");
+    const inGroup = (g.lamps || []).length;
+    count.textContent = ` (${inGroup} lamp${inGroup === 1 ? "" : "s"})`;
+    row.append(cb, span, count);
     membershipList.appendChild(row);
   });
+}
+
+function renderGroupEdit() {
+  membershipPanel.hidden = true;
+  groupEditPanel.hidden = false;
+  const g = groups.find((x) => x.name === activeTarget.name);
+  if (!g) return;
+  groupEditName.textContent = g.name;
+  groupMembers.innerHTML = "";
+  const members = g.lamps || [];
+  if (!members.length) {
+    groupMembers.innerHTML = `<li class="hint">no lamps in this group yet</li>`;
+  } else {
+    members.forEach((mac) => {
+      const li = document.createElement("li");
+      li.className = "member-lamp";
+      const span = document.createElement("span");
+      span.textContent = macLabel(mac);
+      const rem = document.createElement("button");
+      rem.className = "mini del";
+      rem.textContent = "remove";
+      rem.onclick = () => removeLampFromGroup(g, mac);
+      li.append(span, rem);
+      groupMembers.appendChild(li);
+    });
+  }
+
+  // add-lamp dropdown: lamps not already in this group
+  groupAddLamp.innerHTML = "";
+  const addable = lamps.filter((l) => !members.includes(l.mac));
+  if (!addable.length) {
+    groupAddLamp.innerHTML = `<option value="">all lamps already in group</option>`;
+    groupAddBtn.disabled = true;
+  } else {
+    addable.forEach((l) => {
+      const opt = document.createElement("option");
+      opt.value = l.mac;
+      opt.textContent = l.name || l.mac;
+      groupAddLamp.appendChild(opt);
+    });
+    groupAddBtn.disabled = false;
+  }
+}
+
+async function refreshMembership() {
+  groups = await api("api/groups") || [];
+  if (activeTarget?.type === "lamp") renderLampMembership();
+  else if (activeTarget?.type === "group") renderGroupEdit();
 }
 
 async function toggleMembership(group, add) {
   const path = `api/groups/${encodeURIComponent(group.name)}/${add ? "add" : "remove"}`;
   const res = await api(path, { mac: activeTarget.mac });
   log(`${add ? "added to" : "removed from"} group '${group.name}': ${res.ok ? "OK" : res.error || "FAILED"}`);
+  await refreshMembership();
 }
+
+async function addLampToGroup(group, mac) {
+  log(`→ add ${macLabel(mac)} → group '${group.name}'`);
+  const res = await api(`api/groups/${encodeURIComponent(group.name)}/add`, { mac });
+  log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || res.error || ""}`);
+  await refreshMembership();
+}
+
+async function removeLampFromGroup(group, mac) {
+  log(`→ remove ${macLabel(mac)} ← group '${group.name}'`);
+  const res = await api(`api/groups/${encodeURIComponent(group.name)}/remove`, { mac });
+  log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || res.error || ""}`);
+  await refreshMembership();
+}
+
+groupAddBtn.addEventListener("click", () => {
+  const g = groups.find((x) => x.name === activeTarget.name);
+  if (!g || !groupAddLamp.value) return;
+  addLampToGroup(g, groupAddLamp.value);
+});
 
 // ── generic command buttons ──────────────────────────────────────────────
 
