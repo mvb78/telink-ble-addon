@@ -339,7 +339,10 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
                 msg = f"{mac} pair state 0x{state:02x} (unexpected), addr attempt {addr}"
             return ok, msg
     except Exception as e:
-        return False, f"provision failed: {e}"
+        import traceback
+        tb = traceback.format_exc()
+        _log(f"provision exception for {mac}: {tb}")
+        return False, f"provision failed: {type(e).__name__}: {e}"
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -689,6 +692,54 @@ def api_lamp_read_status():
         })
     _log(f"read-status: {len(out)} result(s)")
     return jsonify({"ok": True, "msg": dr["msg"], "results": out, "daemon": True})
+
+
+@app.route("/api/debug/login", methods=["POST"])
+def api_debug_login():
+    """Raw login probe: connect directly to a lamp and dump the full pair-char
+    exchange (request + raw response bytes) for a given name/password pair.
+
+    No mesh commands, no provisioning — only the 0x0C login handshake. This tells
+    us whether the lamp authenticates as in-mesh vs unprovisioned, and the exact
+    failure byte. Caller must pause the daemon first.
+    """
+    body = request.get_json(silent=True) or {}
+    mac = (body.get("mac") or "").upper()
+    name = body.get("name", "Smart_qXsx")
+    password = body.get("password", "1234")
+    if not mac:
+        return jsonify({"ok": False, "msg": "mac required"}), 400
+
+    async def _probe():
+        import os as _os
+        from bleak import BleakScanner, BleakClient
+        import provision_lamp as pl
+        from config import CHAR_PAIR_UUID
+        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        if not device:
+            return {"ok": False, "msg": f"{mac} not found"}
+        out = {"mac": mac, "advertised": device.name}
+        base_key = pl.derive_base_key(name, password)
+        r1 = _os.urandom(8)
+        challenge = pl.build_challenge(base_key, r1)
+        payload = bytearray(17)
+        payload[0] = 0x0C
+        payload[1:9] = r1
+        payload[9:17] = challenge
+        async with BleakClient(device.address) as client:
+            await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
+            await asyncio.sleep(0.6)
+            rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+            out["tried_name"] = f"{name!r}"
+            out["tried_password"] = f"{password!r}"
+            if not rsp:
+                out["response"] = "NO RESPONSE"
+                return out
+            out["response_byte"] = f"0x{rsp[0]:02x}"
+            out["response_hex"] = rsp.hex()
+            return out
+
+    return jsonify({"ok": True, "result": _run_async(_probe())})
 
 
 if __name__ == "__main__":
