@@ -153,25 +153,30 @@ async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int 
 async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
     """Assign a unicast mesh address to one lamp (opcode 0xE0) and persist it.
 
-    Returns (ok, message) so both the CLI and the web UI can surface the result.
+    The packet itself is delivered via the daemon (it holds the lamp's single
+    BLE connection — a Telink lamp accepts only one), falling back to a direct
+    connect if no daemon is running. Returns (ok, message) for CLI and web.
     """
     lamps = registry.load()
     lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
     if not lamp:
         return False, f"Lamp {mac} not in lamps.json — run 'discover' first."
+    params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
+    if _try_daemon(0xE0, params, "all", lamp["mac"], 0, expected_count=1):
+        registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
+        return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via daemon"
     ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
     try:
         await ctrl.connect()
         await ctrl.login()
         seq = ctrl.seq_manager.next()
-        params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
         p1, p2 = build_redundant_packet(seq, 0, 0xE0, params)
         await ctrl.send_packet(p1)
         await asyncio.sleep(0.4)
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
         registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
-        return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x})"
+        return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via direct connect"
     except Exception as e:
         return False, f"[{lamp['name']}] FAILED: {e}"
     finally:
