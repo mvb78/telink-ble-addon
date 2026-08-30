@@ -280,7 +280,7 @@ def api_lamp_provision(mac):
         _run_sync(lambda: _stop_daemon())
         open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
 
-    ok, msg = _run_async(_provision_direct(mac, addr, name, password, current_name, current_password))
+    ok, msg = _run_async(_provision_direct(mac, addr, name, password, current_name, current_password, bootstrap=bool(data.get("bootstrap", False))))
     if ok:
         lamps = registry.load()
         registry.upsert(lamps, mac.upper(), name, password, mesh_address=addr)
@@ -290,7 +290,7 @@ def api_lamp_provision(mac):
     return jsonify({"ok": ok, "msg": msg, "daemon_paused": True})
 
 
-async def _provision_direct(mac, addr, name, password, current_name=None, current_password=None):
+async def _provision_direct(mac, addr, name, password, current_name=None, current_password=None, bootstrap=False):
     """Replicate provision_lamp.py's APK flow, adapted to run in-container.
 
     `current_name`/`current_password` are the credentials the lamp currently keys
@@ -312,7 +312,34 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
         login_password = current_password if current_password else password
         from bleak import BleakClient
         async with BleakClient(device.address) as client:
-            session_key = await pl.apk_login(client, login_name, login_password)
+            if bootstrap:
+                # Brand-new / unprovisioned Telink node bootstrap: the APK uses a
+                # FIXED nonce R_APP = A0..A7 for the initial 0x0C pairing write
+                # (reverse-engineered from factory provisioning), rather than a
+                # random r1. The lamp only accepts the pre-baked nonce when it is
+                # not yet part of any mesh (e.g. right after a kick/reset).
+                from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
+                from config import CHAR_PAIR_UUID as _PAIR
+                R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
+                base_key = derive_base_key(login_name, login_password)
+                challenge = build_challenge(base_key, R_APP)
+                payload = bytearray(17)
+                payload[0] = 0x0C
+                payload[1:9] = R_APP
+                payload[9:17] = challenge
+                await client.write_gatt_char(_PAIR, bytes(payload), response=True)
+                await asyncio.sleep(0.6)
+                rsp = await client.read_gatt_char(_PAIR)
+                if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
+                    return False, f"bootstrap login rejected: rsp=0x{rsp.hex() if rsp else 'none'}"
+                r2 = bytes(rsp[1:9])
+                sample_s = bytes(rsp[9:17])
+                if not verify_sample_s(login_name, login_password, r2, sample_s):
+                    return False, "bootstrap sample_s mismatch"
+                session_key = get_session_key(login_name, login_password, R_APP, r2)
+                _log(f"bootstrap login OK for {mac}")
+            else:
+                session_key = await pl.apk_login(client, login_name, login_password)
             params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
             from telink_mesh import SequenceManager, build_mesh_packet
             from telink_crypto import encrypt_packet
