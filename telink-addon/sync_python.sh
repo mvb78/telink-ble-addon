@@ -8,7 +8,8 @@ SRC="."
 DST="telink-addon/python"
 
 FILES=(config.py lamp_registry.py group_registry.py telink_cli.py
-       telink_daemon.py telink_crypto.py telink_mesh.py telink_ble.py web_app.py)
+       telink_daemon.py telink_crypto.py telink_mesh.py telink_ble.py web_app.py
+       provision_lamp.py)
 
 mkdir -p "$DST/templates" "$DST/static"
 for f in "${FILES[@]}"; do

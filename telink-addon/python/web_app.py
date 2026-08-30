@@ -17,9 +17,9 @@ from flask import Flask, jsonify, render_template, request
 
 import group_registry as group_registry
 import lamp_registry as registry
-from config import CHAR_NOTIFY_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
+from config import CHAR_COMMAND_UUID, CHAR_NOTIFY_UUID, CHAR_PAIR_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
-from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, cmd_assign_addr, run_on_lamp
+from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, _stop_daemon, cmd_assign_addr, run_on_lamp
 
 app = Flask(__name__)
 
@@ -173,7 +173,41 @@ def index():
 
 @app.route("/api/daemon")
 def api_daemon():
-    return jsonify({"running": os.path.exists("/tmp/telink-ble.sock")})
+    paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
+    return jsonify({"running": os.path.exists("/tmp/telink-ble.sock"),
+                    "paused": paused})
+
+
+def _data_dir():
+    import config as _c
+    return _c._DATA_DIR
+
+
+@app.route("/api/daemon/pause", methods=["POST"])
+def api_daemon_pause():
+    d = _data_dir()
+    open(os.path.join(d, "daemon_paused"), "w").close()
+    return _run_sync(lambda: _stop_daemon()) or {"ok": True}
+
+
+def _run_sync(fn):
+    import threading
+    result = {}
+    def _w():
+        result["ret"] = fn()
+    t = threading.Thread(target=_w, daemon=True)
+    t.start()
+    t.join()
+    return result.get("ret")
+
+
+@app.route("/api/daemon/resume", methods=["POST"])
+def api_daemon_resume():
+    p = os.path.join(_data_dir(), "daemon_paused")
+    if os.path.exists(p):
+        os.unlink(p)
+    # run.sh picks the flag up on its next loop and restarts the daemon.
+    return {"ok": True}
 
 
 # ── lamp API ─────────────────────────────────────────────────────────────
@@ -192,6 +226,83 @@ def api_lamp_assign_addr(mac):
     ok, msg = _run_async(cmd_assign_addr(mac, int(addr)))
     _log(f"assign-addr {mac} -> {addr}: {msg}")
     return jsonify({"ok": ok, "msg": msg})
+
+
+@app.route("/api/lamp/<mac>/provision", methods=["POST"])
+def api_lamp_provision(mac):
+    """Fully provision one lamp (APK flow): pause daemon, direct-connect,
+    login on pair char, set mesh address, set name/password/LTK, verify,
+    then unpause. Only one lamp at a time because a Telink lamp accepts a
+    single BLE connection."""
+    data = request.get_json(silent=True) or {}
+    addr = data.get("addr")
+    name = data.get("name", "Smart_qXsx")
+    password = data.get("password", "1234")
+    if addr is None:
+        return jsonify({"ok": False, "msg": "addr required"}), 400
+    try:
+        addr = int(addr)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "addr must be an int"}), 400
+
+    paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
+    if not paused:
+        _run_sync(lambda: _stop_daemon())
+        open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
+
+    ok, msg = _run_async(_provision_direct(mac, addr, name, password))
+    if ok:
+        lamps = registry.load()
+        registry.upsert(lamps, mac.upper(), name, password, mesh_address=addr)
+        registry.save(lamps)
+        _log(f"provision {mac} -> {addr}: registry updated")
+    _log(f"provision {mac} -> {addr}: {msg}")
+    return jsonify({"ok": ok, "msg": msg, "daemon_paused": True})
+
+
+async def _provision_direct(mac, addr, name, password):
+    """Replicate provision_lamp.py's APK flow, adapted to run in-container."""
+    try:
+        import provision_lamp as pl
+    except Exception as e:
+        return False, f"provision_lamp import failed: {e}"
+    try:
+        from bleak import BleakScanner
+        mac = mac.upper()
+        mac_bytes = bytes.fromhex(mac.replace(":", ""))
+        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        if not device:
+            return False, f"{mac} not found (daemon held/still down?)"
+        from bleak import BleakClient
+        async with BleakClient(device.address) as client:
+            session_key = await pl.apk_login(client, name, password)
+            params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
+            from telink_mesh import SequenceManager, build_mesh_packet
+            from telink_crypto import encrypt_packet
+            seq = SequenceManager().next()
+            packet = build_mesh_packet(seq, 0, 0xE0, params)
+            await client.write_gatt_char(CHAR_COMMAND_UUID, encrypt_packet(session_key, packet, mac_bytes), response=False)
+            await asyncio.sleep(4.0)
+            await pl.set_mesh_param(client, session_key, 0x04, pl.normalize_16(name))
+            await pl.set_mesh_param(client, session_key, 0x05, pl.normalize_16(password))
+            default_ltk = bytearray([
+                0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
+                0xd8, 0xd9, 0xda, 0xdb, 0xdc, 0xdd, 0xde, 0xdf])
+            ltk_payload = pl.encrypt_pair_data(session_key, default_ltk)
+            ltk_cmd = bytearray([0x06]) + ltk_payload + bytearray([0x01])
+            await client.write_gatt_char(CHAR_PAIR_UUID, bytes(ltk_cmd), response=True)
+            await asyncio.sleep(0.3)
+            result = await client.read_gatt_char(CHAR_PAIR_UUID)
+            state = result[0] if result else None
+            if state in (0x07, 0x0F):
+                ok = True
+                msg = f"{mac} provisioned addr={addr} state=0x{state:02x}"
+            else:
+                ok = False
+                msg = f"{mac} pair state 0x{state:02x} (unexpected), addr attempt {addr}"
+            return ok, msg
+    except Exception as e:
+        return False, f"provision failed: {e}"
 
 
 @app.route("/api/discover", methods=["POST"])

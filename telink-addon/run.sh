@@ -34,7 +34,13 @@ fi
 
 DAEMON_PID=""
 
+PAUSED="$TELINK_DATA_DIR/daemon_paused"
+
 start_daemon() {
+  if [ -f "$PAUSED" ]; then
+    echo "[run] daemon paused (flag present) — not starting"
+    return 0
+  fi
   echo "[run] starting daemon"
   python3 telink_daemon.py &
   DAEMON_PID=$!
@@ -73,6 +79,7 @@ while true; do
     stop_all TERM
   fi
   [ -n "$DAEMON_PID" ] && ! kill -0 "$DAEMON_PID" 2>/dev/null && \
-    echo "[run] daemon exited; restarting in 5s" && sleep 5 && start_daemon
+    { [ -f "$PAUSED" ] && echo "[run] daemon stopped and paused — holding" || \
+      { echo "[run] daemon exited; restarting in 5s" && sleep 5 && start_daemon; }; }
   sleep 2
 done
