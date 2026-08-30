@@ -272,7 +272,18 @@ class TelinkController:
                 if pkt[7] == opcode:
                     return pkt
             except asyncio.TimeoutError:
-                continue  # keep polling until outer deadline expires
+                # Queue empty — the HCI-monitor path may be unavailable (e.g. inside a
+                # container).  Fall back to GATT-reading the notify/status characteristic
+                # through the live connection, which works without a raw HCI socket.
+                if remaining > 0.5 and self.client and self.client.is_connected:
+                    try:
+                        raw = bytes(await self.client.read_gatt_char(CHAR_NOTIFY_UUID))
+                    except Exception:
+                        raw = b""
+                    if raw and self.session_key:
+                        plain = decrypt_notification(self.session_key, raw, self.mac_bytes)
+                        if plain and plain[7] == opcode:
+                            return plain
         return None
 
     async def drain_notifications(self, duration: float = 4.0) -> list[bytes]:
