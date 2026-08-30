@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.22 - 2026-08-30
+- Fix add-on `url:` so the store "Visit ... page" link points to the **public**
+  repo (`https://github.com/mvb78/telink-ble-addon`) instead of the private one.
+
 ## 1.0.21 - 2026-08-30
 - Fix group commands (`dst=<group>`) by selecting a **working relay lamp** that is
   currently provisioned in the mesh (current `Smart_mesh`/`8888` creds) instead of
