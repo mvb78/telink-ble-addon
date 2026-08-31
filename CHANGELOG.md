@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.0.23 - 2026-08-31
+- Fix `SequenceManager` monotonic `last_seq` persistence (`telink_mesh.py:4`, `lamp_registry.py:85`) — `TelinkController` now resumes from `last_seq` (`telink_ble.py:79`) and `DaemonSession`/`run_on_lamp` persist after each command. Prevents `sno` duplicate window `0x3F` (`ble_hardware_reference.md:2110`) rejecting `0xD7`/`0x17` group writes, which left flash `0x79000` stale after reboot.
+
 ## 1.0.22 - 2026-08-30
 - Fix add-on `url:` so the store "Visit ... page" link points to the **public**
   repo (`https://github.com/mvb78/telink-ble-addon`) instead of the private one.

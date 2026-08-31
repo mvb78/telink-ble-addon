@@ -23,3 +23,5 @@ progress.md
 # BLE core reference (local research)
 docs/telink-ble.md
 docs/phase2.md
+telink-addon/python/groups.json
+telink-addon/python/lamps.json

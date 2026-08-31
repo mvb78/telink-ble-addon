@@ -167,7 +167,8 @@ def _try_daemon_read(mac: str | None = None, selector: str = "all"):
 
 
 async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int = BROADCAST):
-    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                            initial_seq=lamp.get("last_seq"))
     try:
         await ctrl.connect()
         await ctrl.login()
@@ -177,6 +178,10 @@ async def run_on_lamp(lamp: dict, opcode: int, params: bytes, mesh_address: int 
         await asyncio.sleep(0.2)
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
+        try:
+            registry.update_seq(registry.load(), lamp["mac"], ctrl.seq_manager.seq)
+        except Exception:
+            pass
         print(f"  [{lamp['name']}] OK")
         return True
     except Exception as e:
@@ -202,7 +207,8 @@ async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
         registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
         registry.save(lamps)
         return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via daemon"
-    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                            initial_seq=lamp.get("last_seq"))
     try:
         await ctrl.connect()
         await ctrl.login()
@@ -212,7 +218,8 @@ async def cmd_assign_addr(mac: str, addr: int) -> tuple[bool, str]:
         await asyncio.sleep(0.4)
         await ctrl.send_packet(p2)
         await asyncio.sleep(0.5)
-        registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr)
+        registry.upsert(lamps, lamp["mac"], lamp["name"], lamp["password"], mesh_address=addr,
+                        last_seq=ctrl.seq_manager.seq)
         registry.save(lamps)
         return True, f"[{lamp['name']}] assigned mesh address {addr} (0x{addr:04x}) via direct connect"
     except Exception as e:
@@ -231,7 +238,8 @@ async def run_on_all(targets: list[dict], opcode: int, params: bytes, unicast: b
 async def query_lamp(lamp: dict, opcode: int, params: bytes, response_opcode: int,
                      parse_fn, unicast: bool = False):
     """Send a query command and wait for a response notification."""
-    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                            initial_seq=lamp.get("last_seq"))
     dest = lamp.get("mesh_address", BROADCAST) if unicast else BROADCAST
     try:
         await ctrl.connect()
@@ -255,7 +263,8 @@ async def cmd_gatt_dump(lamp: dict):
     The lamp pushes ATT_NOTIFY automatically after login but rejects CCCD writes,
     so we read the characteristic directly to capture whatever the lamp sends.
     """
-    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+    ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                            initial_seq=lamp.get("last_seq"))
     try:
         await ctrl.connect()
         await ctrl.login()
@@ -337,7 +346,8 @@ async def cmd_list_groups():
 async def cmd_probe_notify(targets: list[dict]):
     """Send status query, dump ALL decrypted notifications for 4s — find correct response opcode."""
     for lamp in targets:
-        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                                initial_seq=lamp.get("last_seq"))
         try:
             await ctrl.connect()
             await ctrl.login()
@@ -377,7 +387,8 @@ async def cmd_status(targets: list[dict]):
 
     da_params = bytes([0x10, 0, 0, 0, 0, 0, 0, 0, 0, 0])
     for lamp in targets:
-        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                                initial_seq=lamp.get("last_seq"))
         try:
             await ctrl.connect()
             await ctrl.login()

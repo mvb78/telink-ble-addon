@@ -104,7 +104,8 @@ async def _query(opcode, params, response_opcode, parse_fn, targets):
     """Send a query command and collect responses from all targets."""
     results = []
     for lamp in targets:
-        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+        ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                                initial_seq=lamp.get("last_seq"))
         try:
             await ctrl.connect()
             await ctrl.login()
@@ -368,10 +369,16 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
             params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
             from telink_mesh import SequenceManager, build_mesh_packet
             from telink_crypto import encrypt_packet
-            seq = SequenceManager().next()
+            # use persisted last_seq if available for monotonic dedup window
+            lamp_entry = next((l for l in registry.load() if l["mac"].upper() == mac.upper()), None)
+            seq = SequenceManager(initial=lamp_entry.get("last_seq") if lamp_entry else None).next()
             packet = build_mesh_packet(seq, 0, 0xE0, params)
             await client.write_gatt_char(CHAR_COMMAND_UUID, encrypt_packet(session_key, packet, mac_bytes), response=False)
             await asyncio.sleep(4.0)
+            try:
+                registry.update_seq(registry.load(), mac, seq)
+            except Exception:
+                pass
             await pl.set_mesh_param(client, session_key, 0x04, pl.normalize_16(name))
             await pl.set_mesh_param(client, session_key, 0x05, pl.normalize_16(password))
             default_ltk = bytearray([

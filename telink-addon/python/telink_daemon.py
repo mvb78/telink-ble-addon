@@ -38,7 +38,8 @@ _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
 class DaemonSession:
     def __init__(self, lamp: dict):
         self.lamp = lamp
-        self.ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"])
+        self.ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
+                                     initial_seq=lamp.get("last_seq"))
         self._last_cmd_time: float = 0.0
         self._lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
@@ -78,6 +79,11 @@ class DaemonSession:
                 await asyncio.sleep(0.2)
                 await self.ctrl.send_command(opcode, params, address)
             self._last_cmd_time = asyncio.get_event_loop().time()
+            try:
+                registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
+                self.lamp["last_seq"] = self.ctrl.seq_manager.seq
+            except Exception:
+                pass
 
     async def drain(self, duration: float = 0.5):
         """Clear stale notifications from this session's queue without acting on them."""
@@ -128,9 +134,12 @@ class DaemonSession:
         except Exception:
             pass
         self.ctrl = TelinkController(
-            self.lamp["mac"], self.lamp["name"], self.lamp["password"]
+            self.lamp["mac"], self.lamp["name"], self.lamp["password"],
+            initial_seq=self.lamp.get("last_seq")
         )
-        self.ctrl.seq_manager = saved_seq
+        # preserve monotonic seq across reconnects
+        if saved_seq.seq != self.ctrl.seq_manager.seq:
+            self.ctrl.seq_manager = saved_seq
         await self.ctrl.connect()
         await self.ctrl.login()
         print(f"  [{self.lamp['name']}] reconnected", flush=True)
