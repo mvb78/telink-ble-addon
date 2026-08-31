@@ -25,6 +25,7 @@ API_STATUS_ALL = "/api/command/status"
 API_CMD_ON = "/api/command/on"
 API_CMD_OFF = "/api/command/off"
 API_CMD_BRIGHTNESS = "/api/command/brightness"
+API_CMD_COLORTEMP = "/api/command/colortemp"
 API_DAEMON = "/api/daemon"
 
 # Add-on brightness is 0-100; HA brightness is 0-255.

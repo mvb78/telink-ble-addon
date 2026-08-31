@@ -292,6 +292,11 @@ class TelinkController:
 
         Drains packets from the queue, skipping opcodes that don't match.
         The lamp sends initial state broadcasts on subscribe before query responses.
+
+        Two response layouts exist (bench-validated 2026-08-31, telink-lab):
+          vendor 20B: opcode at pkt[7] (0xDB/0xDC/0xE9/0xC8/...)
+          mesh layer: decrypted frame starts with op|0xC0 at pkt[0]
+                      (0x14 GRP_RSP, 0x1B STATUS, 0x21 DEV_ADDR_RSP)
         """
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
@@ -301,7 +306,9 @@ class TelinkController:
                 pkt = await asyncio.wait_for(
                     self._notify_queue.get(), timeout=min(remaining, 0.5)
                 )
-                if pkt[7] == opcode:
+                if (len(pkt) == 20 and pkt[7] == opcode) or (
+                        len(pkt) != 20 and (pkt[0] & 0xC0) == 0xC0
+                        and (pkt[0] & 0x3F) == opcode):
                     return pkt
             except asyncio.TimeoutError:
                 continue  # keep polling until outer deadline expires

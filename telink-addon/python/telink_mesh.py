@@ -2,6 +2,11 @@ from config import VENDOR_ID as _VENDOR_ID
 
 
 class SequenceManager:
+    # Default start for entries without persisted last_seq. Must be far ahead of
+    # any sno a lamp may still hold in LUM flash (dedup window ~±0x3F rejects
+    # rewound seqs; any forward jump is accepted). Bench-validated 2026-08-31.
+    DEFAULT_START = 0x1000
+
     def __init__(self, initial: int | None = None):
         if initial is not None and 1 <= initial <= 0xFFFFFF:
             # resume after last persisted seq to avoid duplicate sno dedup (ble_hardware_reference.md:2110)
@@ -9,7 +14,7 @@ class SequenceManager:
             if self.seq == 0:
                 self.seq = 1
         else:
-            self.seq = 0x000001
+            self.seq = self.DEFAULT_START
 
     def next(self) -> int:
         value = self.seq

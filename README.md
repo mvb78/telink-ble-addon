@@ -100,7 +100,6 @@ docs/INSTALL_HAOS.md           # install guide
 
 ## Development note
 
-`telink-addon/python/` is a **synced copy** of the CLI source files from the
-upstream `telink-ble-cli` project. When the upstream package changes, re-sync
-those files into the add-on's `python/` directory before building the add-on
-image (the private repo contains `telink-addon/sync_python.sh` for this).
+`telink-addon/python/` is the **source of truth** for the add-on's Python
+package (the standalone CLI lives in the sister project `telink-ble-cli`).
+Edit the add-on tree directly and commit — there is no sync step.

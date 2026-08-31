@@ -59,11 +59,76 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN].setdefault(entry.entry_id, {})[DATA_COORDINATOR] = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # ── services for full white-only control beyond on/off ──────────────
+
+    async def _handle_recall_scene(call):
+        scene_id = int(call.data.get("scene_id", 1))
+        dst = call.data.get("dst")
+        # entity target → resolve via coordinator lamp/group list if needed
+        payload: dict[str, Any] = {}
+        if dst is not None:
+            payload["dst"] = int(dst)
+        elif call.data.get("entity_id"):
+            # if a light entity was targeted, forward its mac/dst via coordinator lookup
+            ent_ids = call.data["entity_id"]
+            if isinstance(ent_ids, str):
+                ent_ids = [ent_ids]
+            # use first entity's underlying mac/dst if we can
+            for eid in ent_ids:
+                for lamp in (coordinator.data or {}).get("lamps", []):
+                    if f"telink_ble_{lamp['mac'].lower()}" in eid:
+                        payload["mac"] = lamp["mac"]
+                        break
+                if "mac" not in payload:
+                    for grp in (coordinator.data or {}).get("groups", []):
+                        if f"telink_ble_group_{grp['address']}" in eid:
+                            payload["dst"] = int(grp["address"])
+                            break
+                if payload:
+                    break
+        await coordinator.send_command("/api/command/scene", {"id": scene_id, **payload})
+
+    async def _handle_store_scene(call):
+        scene_id = int(call.data.get("scene_id", 1))
+        bri = int(call.data.get("brightness", 50))
+        ct_k = int(call.data.get("color_temp_kelvin", 4000))
+        # warm% for storage
+        from .light import kelvin_to_warm_pct
+
+        payload: dict[str, Any] = {
+            "id": scene_id,
+            "brightness": max(0, min(100, bri)),
+            "r": 0, "g": 0, "b": 0,
+            "ct": kelvin_to_warm_pct(ct_k),
+        }
+        await coordinator.send_command("/api/command/scene-add", payload)
+
+    async def _handle_delete_scene(call):
+        sid = int(call.data.get("scene_id", 1))
+        if sid == 255:
+            await coordinator.send_command("/api/command/scene-clear", {})
+        else:
+            await coordinator.send_command("/api/command/scene-del", {"id": sid})
+
+    async def _handle_sync_time(call):
+        await coordinator.send_command("/api/command/time", {})
+
+    hass.services.async_register(DOMAIN, "recall_scene", _handle_recall_scene)
+    hass.services.async_register(DOMAIN, "store_scene", _handle_store_scene)
+    hass.services.async_register(DOMAIN, "delete_scene", _handle_delete_scene)
+    hass.services.async_register(DOMAIN, "sync_time", _handle_sync_time)
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
+    for svc in ("recall_scene", "store_scene", "delete_scene", "sync_time"):
+        try:
+            hass.services.async_remove(DOMAIN, svc)
+        except Exception:
+            pass
     unload_ok = await hass.config_entries.async_unload_platforms(
         entry, PLATFORMS
     )

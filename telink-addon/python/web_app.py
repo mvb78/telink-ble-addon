@@ -109,6 +109,12 @@ async def _query(opcode, params, response_opcode, parse_fn, targets):
         try:
             await ctrl.connect()
             await ctrl.login()
+            # Drop queued/stale pushes (lamps emit 0xDB after every write) so
+            # the matched response is fresh, not a leftover from an earlier write.
+            try:
+                await ctrl.drain_notifications(duration=0.3)
+            except Exception:
+                pass
             await ctrl.send_command(opcode, params, BROADCAST)
             await asyncio.sleep(0.1)
             await ctrl.send_command(opcode, params, BROADCAST)
@@ -269,6 +275,34 @@ def api_lamp_creds(mac):
 @app.route("/api/lamps")
 def api_lamps():
     return jsonify(registry.load() or [])
+
+
+@app.route("/api/lamp/<mac>/seq", methods=["POST"])
+def api_lamp_seq(mac):
+    """Seed a lamp's persisted last_seq (dedup-window rescue).
+
+    The lamps reject packet seqs at/below what they last saw (±0x3F window), so
+    after registry loss or a fresh install the daemon must never start below
+    the lamps' current sno. POST {"value": N} with N above the highest seq any
+    lamp has seen (forward jumps are always accepted).
+    """
+    data = request.get_json(silent=True) or {}
+    value = data.get("value")
+    if value is None:
+        return jsonify({"ok": False, "msg": "value required"}), 400
+    try:
+        value = int(value) & 0xFFFFFF
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "msg": "value must be an int"}), 400
+    if value < 1:
+        return jsonify({"ok": False, "msg": "value must be >= 1"}), 400
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if not lamp:
+        return jsonify({"ok": False, "msg": f"lamp {mac} not in registry"}), 404
+    registry.update_seq(lamps, mac, value)
+    _log(f"seq {mac}: last_seq seeded to {value}")
+    return jsonify({"ok": True, "msg": f"{mac} last_seq -> {value}"})
 
 
 @app.route("/api/lamp/<mac>/assign-addr", methods=["POST"])

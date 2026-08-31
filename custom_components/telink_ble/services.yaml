@@ -1,0 +1,83 @@
+recall_scene:
+  name: Recall scene
+  description: Recall a stored scene (1-16) on a lamp or group. Uses add-on POST /api/command/scene.
+  target:
+    entity:
+      - domain: light
+        integration: telink_ble
+  fields:
+    scene_id:
+      name: Scene ID
+      description: Scene slot 1..16
+      required: true
+      example: 3
+      selector:
+        number:
+          min: 1
+          max: 16
+          mode: slider
+    dst:
+      name: Group address
+      description: Optional mesh group address (0x8000..) when targeting a group directly. Normally use entity target instead.
+      example: 32768
+      selector:
+        number:
+          min: 32768
+          max: 65534
+
+store_scene:
+  name: Store scene
+  description: Store current lamp state as a scene (add-on POST /api/command/scene-add).
+  target:
+    entity:
+      - domain: light
+        integration: telink_ble
+  fields:
+    scene_id:
+      name: Scene ID
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 16
+          mode: slider
+    brightness:
+      name: Brightness
+      required: false
+      selector:
+        number:
+          min: 0
+          max: 100
+    color_temp_kelvin:
+      name: Color temperature (Kelvin)
+      required: false
+      selector:
+        number:
+          min: 2700
+          max: 6500
+          unit_of_measurement: K
+
+delete_scene:
+  name: Delete scene
+  description: Delete a stored scene or all scenes.
+  target:
+    entity:
+      - domain: light
+        integration: telink_ble
+  fields:
+    scene_id:
+      name: Scene ID
+      description: 1..16, or 255 for all
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 255
+
+sync_time:
+  name: Sync time
+  description: Push host time to lamps (add-on POST /api/command/time). Useful for scheduled scenes.
+  target:
+    entity:
+      - domain: light
+        integration: telink_ble
