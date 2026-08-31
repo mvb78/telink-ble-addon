@@ -617,6 +617,159 @@ def api_kick():
     return _cmd(0xE3, b"\x01", data)
 
 
+@app.route("/api/command/kick-mesh", methods=["POST"])
+def api_kick_mesh():
+    """Mesh-layer kick via opcode 0x23 (mesh_node.py:243) — alternative to app 0xE3."""
+    data = request.get_json() or {}
+    # 0x23 params [0] OutOfMesh, sent as vendor packet; daemon or direct will handle
+    return _cmd(0x23, b"\x00", data)
+
+
+@app.route("/api/lamp/<mac>/delete-pairing", methods=["POST"])
+def api_lamp_delete_pairing(mac):
+    """PAIR_OP_DELETE 0x0E (pairing.md:115) — clear provisioning, advertises as out_of_mesh."""
+    data = request.get_json(silent=True) or {}
+    current_name = data.get("current_name")
+    current_password = data.get("current_password")
+    # default to stored creds if not provided
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if current_name is None and lamp:
+        current_name = lamp.get("name")
+    if current_password is None and lamp:
+        current_password = lamp.get("password")
+    if not current_name or not current_password:
+        return jsonify({"ok": False, "msg": "current_name/current_password required (or lamp in registry)"}), 400
+
+    async def _do():
+        import provision_lamp as pl
+        from bleak import BleakScanner, BleakClient
+        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15)
+        if not device:
+            return False, f"{mac} not found"
+        async with BleakClient(device.address) as client:
+            try:
+                await pl.apk_login(client, current_name, current_password)
+            except Exception as e:
+                return False, f"login failed: {e}"
+            await pl.delete_pairing(client)
+            rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+            return True, f"delete pairing sent, pair_state=0x{rsp[0]:02x}" if rsp else "delete sent (no rsp)"
+
+    paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
+    if not paused:
+        _run_sync(lambda: _stop_daemon())
+        open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
+    ok, msg = _run_async(_do())
+    _log(f"delete-pairing {mac}: {msg}")
+    return jsonify({"ok": ok, "msg": msg, "daemon_paused": True})
+
+
+@app.route("/api/lamp/<mac>/get-ltk", methods=["POST"])
+def api_lamp_get_ltk(mac):
+    """PAIR_OP_GET_MESH_LTK 0x08 — read LTK from flash (mesh_node.py:246)."""
+    data = request.get_json(silent=True) or {}
+    mesh_name = data.get("mesh_name")
+    mesh_password = data.get("mesh_password")
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if mesh_name is None and lamp:
+        mesh_name = lamp.get("name")
+    if mesh_password is None and lamp:
+        mesh_password = lamp.get("password")
+    if not mesh_name or not mesh_password:
+        return jsonify({"ok": False, "msg": "mesh_name/mesh_password required"}), 400
+
+    async def _do():
+        import provision_lamp as pl
+        from bleak import BleakScanner, BleakClient
+        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15)
+        if not device:
+            return None, f"{mac} not found"
+        async with BleakClient(device.address) as client:
+            await pl.apk_login(client, mesh_name, mesh_password)
+            ltk = await pl.get_mesh_ltk(client, mesh_name, mesh_password)
+            return ltk, f"LTK={ltk.hex()}"
+
+    paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
+    if not paused:
+        _run_sync(lambda: _stop_daemon())
+        open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
+    try:
+        ltk, msg = _run_async(_do())
+        if ltk is None:
+            return jsonify({"ok": False, "msg": msg}), 500
+        return jsonify({"ok": True, "ltk": ltk.hex(), "msg": msg, "daemon_paused": True})
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        _log(f"get-ltk {mac} error: {tb}")
+        return jsonify({"ok": False, "msg": f"{type(e).__name__}: {e}"}), 500
+
+
+@app.route("/api/command/mesh-add-group", methods=["POST"])
+def api_mesh_add_group():
+    data = request.get_json() or {}
+    addr = data.get("addr")
+    if addr is None:
+        return jsonify({"ok": False, "msg": "addr required (0x8000-0xFFFE)"}), 400
+    try:
+        addr = int(addr, 0) if isinstance(addr, str) else int(addr)
+    except:
+        return jsonify({"ok": False, "msg": "invalid addr"}), 400
+    return _cmd(0x17, bytes([0x01, addr & 0xFF, (addr >> 8) & 0xFF]), data)
+
+
+@app.route("/api/command/mesh-del-group", methods=["POST"])
+def api_mesh_del_group():
+    data = request.get_json() or {}
+    addr = data.get("addr")
+    if addr is None:
+        return jsonify({"ok": False, "msg": "addr required"}), 400
+    try:
+        addr = int(addr, 0) if isinstance(addr, str) else int(addr)
+    except:
+        return jsonify({"ok": False, "msg": "invalid addr"}), 400
+    return _cmd(0x17, bytes([0x00, addr & 0xFF, (addr >> 8) & 0xFF]), data)
+
+
+@app.route("/api/command/mesh-get-groups", methods=["POST"])
+def api_mesh_get_groups():
+    data = request.get_json() or {}
+    targets = _get_targets(data)
+    if not targets:
+        return jsonify({"ok": False, "msg": "No targets"})
+    def parse_groups(pkt):
+        # mesh_common expects decrypted payload op&0x3F == 0x14, params up to 10B low bytes
+        # pkt from decrypt is raw mesh payload: op+ vendor+ params
+        # handle both vendor 0xDB and mesh 0x14 formats
+        if len(pkt) >= 1 and (pkt[0] & 0x3F) == 0x14:
+            groups = [f"0x{0x8000 | b:04x}" for b in pkt[3:13] if b != 0xFF]
+            return {"groups": groups, "raw": pkt.hex()}
+        p = pkt[10:] if len(pkt) >= 11 else pkt
+        return {"raw": pkt.hex(), "fallback": p.hex()}
+    results = _query_route(0x1d, bytes([0x01, 0x01]), 0x14, parse_groups, targets, data)
+    return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/command/mesh-get-status", methods=["POST"])
+def api_mesh_get_status():
+    data = request.get_json() or {}
+    targets = _get_targets(data)
+    if not targets:
+        return jsonify({"ok": False, "msg": "No targets"})
+    def parse_mesh_status(pkt):
+        if len(pkt) >= 6 and (pkt[0] & 0x3F) == 0x1b:
+            cw = pkt[1] | (pkt[2] << 8)
+            ww = pkt[3] | (pkt[4] << 8)
+            br = pkt[5] | (pkt[6] << 8) if len(pkt) > 6 else 0
+            return {"cw": cw, "ww": ww, "brightness": br, "raw": pkt.hex()}
+        p = pkt[10:] if len(pkt) >= 11 else pkt
+        return {"raw": pkt.hex(), "fallback": p.hex()}
+    results = _query_route(0x1a, bytes([0x01]), 0x1b, parse_mesh_status, targets, data)
+    return jsonify({"ok": True, "results": results})
+
+
 @app.route("/api/command/time", methods=["POST"])
 def api_time():
     now = datetime.datetime.now()

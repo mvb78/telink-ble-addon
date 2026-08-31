@@ -82,7 +82,7 @@ def save(lamps: list[dict]) -> None:
     print(f"Saved {len(canonical)} lamp(s) to {LAMPS_FILE}")
 
 
-def upsert(lamps: list[dict], mac: str, name: str, password: str, mesh_address: int | None = None) -> list[dict]:
+def upsert(lamps: list[dict], mac: str, name: str, password: str, mesh_address: int | None = None, last_seq: int | None = None) -> list[dict]:
     mac = mac.upper()
     for entry in lamps:
         if str(entry["mac"]).upper() == mac:
@@ -92,12 +92,26 @@ def upsert(lamps: list[dict], mac: str, name: str, password: str, mesh_address: 
             entry.pop("group", None)
             if mesh_address is not None:
                 entry["mesh_address"] = mesh_address
+            if last_seq is not None:
+                entry["last_seq"] = last_seq & 0xFFFFFF
             return lamps
     lamp = {"mac": mac, "name": name, "password": password, "mesh": _mesh_for(password)}
     if mesh_address is not None:
         lamp["mesh_address"] = mesh_address
+    if last_seq is not None:
+        lamp["last_seq"] = last_seq & 0xFFFFFF
     lamps.append(lamp)
     return lamps
+
+
+def update_seq(lamps: list[dict], mac: str, seq: int) -> None:
+    """Persist last used seq for dedup window (blo_hardware_reference.md:2110)."""
+    mac = mac.upper()
+    for entry in lamps:
+        if str(entry["mac"]).upper() == mac:
+            entry["last_seq"] = seq & 0xFFFFFF
+            save(lamps)
+            return
 
 
 def get_targets(lamps: list[dict], selector: str, mac: str | None = None, addr: int | None = None) -> list[dict]:
@@ -106,16 +120,12 @@ def get_targets(lamps: list[dict], selector: str, mac: str | None = None, addr: 
     mac:      specific MAC address (overrides selector)
     addr:     specific mesh address (overrides selector)
     """
-    # --- Optimized: Check address first/most specific/first loop iteration ---
-    
     if addr is not None:
-        # Check for exact address match
         for l in lamps:
             if l.get("mesh_address") == addr:
-                return [l] # Return as a list, matching other return styles
+                return [l]
         raise Exception(f"No lamp with mesh_address {addr} in lamps.json")
-    
-    # --- Optimized: Check MAC second ---
+
     if mac:
         mac = mac.upper()
         for l in lamps:
@@ -123,54 +133,27 @@ def get_targets(lamps: list[dict], selector: str, mac: str | None = None, addr: 
                 return [l]
         raise Exception(f"Lamp {mac} not in lamps.json — run 'discover' first")
 
-    # --- Optimized: Handle 'all' selector ---
     if selector == "all":
         return lamps
 
-    # --- Optimized: Determine selector once ---
     normalized_selector = _normalize_selector(selector)
-    
     if normalized_selector == "all":
         return lamps
 
-    # --- Optimized: Final filter using a single loop ---
     matches = []
     for l in lamps:
-        # Check if the normalized mesh type matches the required selector
         if _normalize_mesh_value(l.get("mesh", l.get("group")), password=l.get("password")) == normalized_selector:
             matches.append(l)
-            
     return matches
-
-    if addr is not None:
-        matches = [l for l in lamps if l.get("mesh_address") == addr]
-        if not matches:
-            raise Exception(f"No lamp with mesh_address {addr} in lamps.json")
-        return matches
-    if mac:
-        mac = mac.upper()
-        matches = [l for l in lamps if l["mac"].upper() == mac]
-        if not matches:
-            raise Exception(f"Lamp {mac} not in lamps.json — run 'discover' first")
-        return matches
-    if selector == "all":
-        return lamps
-    normalized_selector = _normalize_selector(selector)
-    if normalized_selector == "all":
-        return lamps
-    return [
-        l
-        for l in lamps
-        if _normalize_mesh_value(l.get("mesh", l.get("group")), password=l.get("password")) == normalized_selector
-    ]
 
 
 def print_table(lamps: list[dict]) -> None:
     if not lamps:
         print("  (none)")
         return
-    print(f"  {'MAC':<20} {'Name':<20} {'Password':<10} {'Addr'}")
-    print(f"  {'-'*20} {'-'*20} {'-'*10} {'-'*4}")
+    print(f"  {'MAC':<20} {'Name':<20} {'Password':<10} {'Addr':<6} {'Seq'}")
+    print(f"  {'-'*20} {'-'*20} {'-'*10} {'-'*6} {'-'*6}")
     for l in lamps:
         addr = str(l.get("mesh_address", ""))
-        print(f"  {l['mac']:<20} {l['name']:<20} {l['password']:<10} {addr}")
+        seq = str(l.get("last_seq", ""))
+        print(f"  {l['mac']:<20} {l['name']:<20} {l['password']:<10} {addr:<6} {seq}")

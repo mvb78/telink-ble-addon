@@ -19,3 +19,7 @@ venv/
 opencode.txt
 CLAUDE.md
 progress.md
+
+# BLE core reference (local research)
+docs/telink-ble.md
+docs/phase2.md

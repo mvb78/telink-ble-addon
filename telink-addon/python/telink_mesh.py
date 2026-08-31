@@ -2,8 +2,14 @@ from config import VENDOR_ID as _VENDOR_ID
 
 
 class SequenceManager:
-    def __init__(self):
-        self.seq = 0x000001
+    def __init__(self, initial: int | None = None):
+        if initial is not None and 1 <= initial <= 0xFFFFFF:
+            # resume after last persisted seq to avoid duplicate sno dedup (ble_hardware_reference.md:2110)
+            self.seq = (initial + 1) & 0xFFFFFF
+            if self.seq == 0:
+                self.seq = 1
+        else:
+            self.seq = 0x000001
 
     def next(self) -> int:
         value = self.seq

@@ -25,6 +25,8 @@ from telink_crypto import (
     verify_sample_s,
     encrypt_packet,
     decrypt_notification,
+    decrypt_mesh_notification,
+    decrypt_notification_auto,
     get_session_key,
 )
 from telink_mesh import SequenceManager, build_mesh_packet
@@ -74,13 +76,13 @@ def _open_hci_monitor() -> socket.socket | None:
 
 
 class TelinkController:
-    def __init__(self, mac: str, name: str, password: str):
+    def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None):
         self.mac = mac.upper()
         self.name = name
         self.password = password
         self.mac_bytes = bytes.fromhex(mac.replace(":", ""))
         self.client = None
-        self.seq_manager = SequenceManager()
+        self.seq_manager = SequenceManager(initial=initial_seq)
         self.session_key = None
         self._notify_queue: asyncio.Queue = asyncio.Queue()
         self._monitor_task: asyncio.Task | None = None
@@ -89,11 +91,23 @@ class TelinkController:
     async def connect(self):
         print(f"  Scanning for {self.name} ({self.mac}) ...")
         target = None
+        # RPA fallback: TLSR rotates random private address (BLTC...md:624) — static MAC may have changed.
+        # Vendor filter keeps scan valid even after rotation.
+        fallback = None
 
         def callback(device, adv):
-            nonlocal target
-            if not target and device.address.upper() == self.mac:
+            nonlocal target, fallback
+            if target:
+                return
+            if device.address.upper() == self.mac:
                 target = device
+                return
+            # RPA fallback: same BLE name + vendor ID 0x0211, capture as fallback if exact MAC not seen
+            uuids = [str(u).lower() for u in (adv.service_uuids or [])]
+            has_service_uuid = SERVICE_UUID.lower() in uuids
+            has_telink_mfr = VENDOR_ID in (adv.manufacturer_data or {})
+            if (has_service_uuid or has_telink_mfr) and (device.name or "") == self.name and fallback is None:
+                fallback = device
 
         async with BleakScanner(callback) as scanner:
             for _ in range(6):
@@ -101,8 +115,12 @@ class TelinkController:
                 if target:
                     break
 
+        if not target and fallback is not None:
+            print(f"  [warn] RPA fallback: {self.mac} not found, using {fallback.address} ({fallback.name}) with same name+vendor")
+            target = fallback
+
         if not target:
-            raise Exception(f"{self.mac} not found — is the phone app disconnected?")
+            raise Exception(f"{self.mac} not found — is the phone app disconnected? (RPA fallback also failed; try `discover` to refresh MAC)")
 
         # Open the HCI monitor socket before connecting so we don't miss the
         # first notification burst that arrives right after login.
@@ -188,18 +206,40 @@ class TelinkController:
                 att_op = payload[8]
                 if att_op == 0x1b and len(payload) >= 11:
                     handle = payload[9] | (payload[10] << 8)
-                    if handle == 0x0012 and len(payload) >= 31:
-                        raw_notify = payload[11:31]
-                        if self.session_key:
-                            plain = decrypt_notification(self.session_key, raw_notify, self.mac_bytes)
+                    if handle == 0x0012 and len(payload) >= 11:
+                        # vendor path 20B at 11:31, mesh path variable: try max slice and let decrypt validate
+                        raw_notify = payload[11:]
+                        if self.session_key and len(raw_notify) >= 8:
+                            # try 20B vendor slice first
+                            plain = None
+                            if len(raw_notify) >= 20:
+                                plain = decrypt_notification(self.session_key, raw_notify[:20], self.mac_bytes)
+                                # also try mesh format on same bytes if vendor MIC fails (fallback below)
+                                if plain and plain[7] not in (0xDB, 0xDC, 0x1B, 0x14, 0x15, 0x16, 0x21):
+                                    # maybe mesh format — try alternative
+                                    mesh_plain = decrypt_mesh_notification(raw_notify, self.session_key, self.mac_bytes)
+                                    if mesh_plain:
+                                        plain = mesh_plain
+                            if not plain and len(raw_notify) >= 8:
+                                plain = decrypt_mesh_notification(raw_notify[: min(len(raw_notify), 32)], self.session_key, self.mac_bytes)
+                            if not plain and len(raw_notify) >= 20:
+                                # last try vendor auto
+                                plain = decrypt_notification_auto(self.session_key, raw_notify[:20], self.mac_bytes)
                             if plain:
                                 self._notify_queue.put_nowait(plain)
             buf = buf[pos:]
 
     def _on_bleak_notify(self, characteristic, data: bytearray):
         """Bleak notification callback — fires if CCCD subscription succeeded."""
-        if self.session_key and len(data) == 20:
-            plain = decrypt_notification(self.session_key, bytes(data), self.mac_bytes)
+        if self.session_key and len(data) >= 8:
+            raw = bytes(data)
+            plain = None
+            if len(raw) >= 20:
+                plain = decrypt_notification(self.session_key, raw[:20], self.mac_bytes)
+            if not plain:
+                plain = decrypt_mesh_notification(raw, self.session_key, self.mac_bytes)
+            if not plain and len(raw) >= 20:
+                plain = decrypt_notification_auto(self.session_key, raw[:20], self.mac_bytes)
             if plain:
                 self._notify_queue.put_nowait(plain)
 

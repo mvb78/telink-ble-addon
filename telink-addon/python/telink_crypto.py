@@ -85,7 +85,7 @@ def _aes_block(sk: bytes, data: bytes) -> bytes:
 
 def decrypt_notification(session_key: bytes, data: bytes, mac_bytes: bytes) -> bytes | None:
     """
-    Decrypt a 20-byte ATT_NOTIFY packet from a Telink lamp.
+    Decrypt a 20-byte ATT_NOTIFY packet from a Telink lamp (vendor 0x0211 path).
 
     IVM = getSecIVS(mac)[0..2] + data[0..4]  (LightController.java onNotify)
     Decrypt range: bytes 7-19 (13 bytes, starting at the opcode field).
@@ -101,6 +101,83 @@ def decrypt_notification(session_key: bytes, data: bytes, mac_bytes: bytes) -> b
     for i in range(13):
         pkt[7 + i] ^= ks[i]
     return bytes(pkt)
+
+
+def aes_att_encryption(key: bytes, source: bytes) -> bytes:
+    """Mirrors Rust aes_att_encryption — reverse before/after AES-ECB (mesh_common.py:660)."""
+    k = bytearray(key); k.reverse()
+    s = bytearray(source); s.reverse()
+    cipher = AES.new(bytes(k), AES.MODE_ECB)
+    res = bytearray(cipher.encrypt(bytes(s)))
+    res.reverse()
+    return bytes(res)
+
+
+def aes_att_decryption(key: bytes, ciphertext: bytes) -> bytes:
+    """Inverse of aes_att_encryption (mesh_common.py:671)."""
+    k = bytearray(key); k.reverse()
+    c = bytearray(ciphertext); c.reverse()
+    cipher = AES.new(bytes(k), AES.MODE_ECB)
+    res = bytearray(cipher.decrypt(bytes(c)))
+    res.reverse()
+    return bytes(res)
+
+
+def decrypt_mesh_notification(data: bytes, session_key: bytes, mac_bytes_fwd: bytes) -> bytes | None:
+    """
+    Decrypt S→M mesh notification (sno[3]|src[2]|mic[2]|ciphertext) per mesh_common.py:685.
+    Handles 0x1b STATUS, 0x14-0x16 group responses, 0x21 dev addr.
+    Returns decrypted payload (op|vendor|params) or None on MIC failure.
+    """
+    if len(data) < 8:
+        return None
+    sno = data[0:3]
+    src_addr = data[3:5]
+    mic_received = data[5:7]
+    encrypted_payload = bytearray(data[7:])
+    if not encrypted_payload:
+        return None
+    mac_rev = bytearray(mac_bytes_fwd); mac_rev.reverse()
+    ivs = bytearray(8)
+    ivs[0:3] = mac_rev[0:3]
+    ivs[3:6] = sno
+    ivs[6:8] = src_addr
+    # CTR decrypt
+    r = bytearray(16)
+    r[1:9] = ivs
+    decrypted = bytearray(len(encrypted_payload))
+    keystream = bytearray(16)
+    for i in range(len(encrypted_payload)):
+        if (i & 15) == 0:
+            keystream = bytearray(aes_att_encryption(session_key, bytes(r)))
+            r[0] = (r[0] + 1) & 0xFF
+        decrypted[i] = encrypted_payload[i] ^ keystream[i & 15]
+    # CBC-MAC auth
+    auth_block = bytearray(16)
+    auth_block[0:8] = ivs
+    auth_block[8] = len(encrypted_payload)
+    auth_value = bytearray(aes_att_encryption(session_key, bytes(auth_block)))
+    for i in range(len(decrypted)):
+        auth_value[i & 15] ^= decrypted[i]
+        if (i & 15) == 15 or i == len(decrypted) - 1:
+            auth_value = bytearray(aes_att_encryption(session_key, bytes(auth_value)))
+    if auth_value[0:2] != mic_received:
+        return None
+    return bytes(decrypted)
+
+
+def decrypt_notification_auto(session_key: bytes, data: bytes, mac_bytes: bytes) -> bytes | None:
+    """Try vendor 20B IVM path first, then mesh IVS path (covers both notification formats)."""
+    res = decrypt_notification(session_key, data, mac_bytes)
+    # vendor path always returns 20B; verify opcode plausible (0xDB/0xDC etc) else try mesh
+    if res and len(res) == 20 and res[7] in (0xDB, 0xDC, 0x1B, 0x14, 0x15, 0x16, 0x21):
+        return res
+    mesh_res = decrypt_mesh_notification(data, session_key, mac_bytes)
+    if mesh_res:
+        # wrap mesh payload into pseudo 20B for compatibility: pad to examine opcode at [0]
+        # mesh decrypted starts with op|0xC0, so op = mesh_res[0] & 0x3F
+        return mesh_res
+    return res
 
 
 def encrypt_packet(session_key: bytes, packet: bytes, mac_bytes: bytes) -> bytes:
