@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.25 - 2026-08-31
+- Switch to **prebuilt image distribution**: `image: ghcr.io/mvb78/telink-ble-cli`
+  in config.yaml; the store install now pulls the image instead of running a
+  local docker buildx build (which silently hangs on Supervisor 7.x/HAOS 6.1).
+- Dockerfile: add `io.hass.*` + OCI labels per the 2026 builder-migration docs.
+
 ## 1.0.22 - 2026-08-30
 - Fix add-on `url:` so the store "Visit ... page" link points to the **public**
   repo (`https://github.com/mvb78/telink-ble-addon`) instead of the private one.

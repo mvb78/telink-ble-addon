@@ -1,6 +1,7 @@
 name: Telink BLE CLI
-version: "1.0.24"
+version: "1.0.25"
 slug: telink_ble_cli
+image: "ghcr.io/mvb78/telink-ble-cli"
 description: Web UI + Home Assistant bridge for Telink (Smart_qXsx) BLE mesh lamps
 url: "https://github.com/mvb78/telink-ble-addon"
 codenotary: false
