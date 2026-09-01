@@ -1,5 +1,5 @@
 name: Telink BLE CLI
-version: "1.0.26"
+version: "1.0.27"
 slug: telink_ble_cli
 image: "ghcr.io/mvb78/telink-ble-cli"
 description: Web UI + Home Assistant bridge for Telink (Smart_qXsx) BLE mesh lamps
@@ -32,7 +32,7 @@ ports:
 ports_description:
   8099/tcp: Telink web UI (fallback when Ingress is unavailable)
 options:
-  known_passwords: "0000,1234,123"
+  known_passwords: "0000,1234,123,8888"
   scan_timeout: 45
 schema:
   known_passwords: str

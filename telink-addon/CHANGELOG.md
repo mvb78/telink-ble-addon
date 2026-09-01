@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.0.27 - 2026-09-01
+- Add `8888` to the default `known_passwords` list (config default + code
+  fallback). The Smart_qXsx lamps use the mesh password `8888`, so discovery
+  would silently fail to log in and save lamps with only the old defaults.
+
 ## 1.0.26 - 2026-08-31
 - Move add-on host port mapping from 8099 to 8098: host port 8099 is taken
   by a `ttyd` process on this installation, so the mapping silently failed
