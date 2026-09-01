@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.38 - 2026-09-01
+## 1.0.39 - 2026-09-01
+- Serve HTML/JS/CSS with no-cache headers so stale browser caches can never
+  break the UI after an add-on update (a cached old app.js referencing the
+  removed swatches element was crashing on load, hiding the lamp list).
 - White temperature slider applies on release (no extra Apply button), like
   brightness. Cache-bust versioned static asset URLs (?v=1.0.38) so browsers
   never serve stale JS/CSS after an add-on update.

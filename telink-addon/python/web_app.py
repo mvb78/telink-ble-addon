@@ -29,6 +29,18 @@ def _log_request():
     _log(f"HTTP {request.method} {request.path}")
 
 
+@app.after_request
+def _no_cache_static(resp):
+    # Never let a browser cache the HTML/JS/CSS: an old cached app.js can
+    # reference elements removed in a newer page and break the UI after an
+    # add-on update. The ?v= cache-buster makes this belt-and-braces.
+    if request.path.startswith("/static/") or request.path == "/":
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+
 def _log(msg: str) -> None:
     """Write a line to stderr so it appears in `ha apps logs` (flushed)."""
     print(f"[web] {msg}", file=sys.stderr, flush=True)
