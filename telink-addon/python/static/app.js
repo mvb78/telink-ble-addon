@@ -381,6 +381,9 @@ $("brightness-slider").addEventListener("change", (e) => {
 $("ct-slider").addEventListener("input", (e) => {
   $("ct-val").textContent = e.target.value;
 });
+$("ct-slider").addEventListener("change", (e) => {
+  sendCmd("colortemp", { value: +e.target.value });
+});
 
 // scene dropdown 1..16
 const sceneSel = $("scene-id");

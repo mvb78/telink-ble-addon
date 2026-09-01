@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.37 - 2026-09-01
+## 1.0.38 - 2026-09-01
+- White temperature slider applies on release (no extra Apply button), like
+  brightness. Cache-bust versioned static asset URLs (?v=1.0.38) so browsers
+  never serve stale JS/CSS after an add-on update.
 - Web UI: restyle to the Home Assistant Material 3 look (Roboto, HA dark
   card theme) and remove the Color section (lamps are tunable-white only).
 - Daemon no longer exits/crash-loops when all lamps are momentarily offline:
