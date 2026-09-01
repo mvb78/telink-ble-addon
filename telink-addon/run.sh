@@ -25,6 +25,13 @@ export TELINK_WEB_DEBUG=0
 # sidecar container; this add-on only serves the web UI and bridges to it.
 [ -n "${CONFIG_DAEMON_HOST:-}" ] && export TELINK_DAEMON_HOST="${CONFIG_DAEMON_HOST}"
 [ -n "${CONFIG_DAEMON_PORT:-}" ] && export TELINK_DAEMON_PORT="${CONFIG_DAEMON_PORT}"
+# The Supervisor injects CONFIG_* env vars only at container creation, so an
+# option change while running won't reach this script. Read /data/options.json
+# (always current) as the authoritative source.
+if [ -z "${TELINK_DAEMON_HOST:-}" ] && [ -f /data/options.json ]; then
+  export TELINK_DAEMON_HOST="$(python3 -c 'import json;print(json.load(open("/data/options.json")).get("daemon_host","") or "")' 2>/dev/null || true)"
+  export TELINK_DAEMON_PORT="$(python3 -c 'import json;print(json.load(open("/data/options.json")).get("daemon_port",8097))' 2>/dev/null || true)"
+fi
 
 mkdir -p "$TELINK_DATA_DIR"
 

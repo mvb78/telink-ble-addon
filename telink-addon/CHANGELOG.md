@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.33 - 2026-09-01
+## 1.0.34 - 2026-09-01
+- run.sh reads daemon_host/daemon_port from /data/options.json so option
+  changes apply without recreating the container (CONFIG_* env is only
+  injected at creation).
 - **Variant B**: split BLE daemon from web UI. The daemon can run as a
   privileged sidecar container listening on TCP (`TELINK_DAEMON_HOST`/`PORT`),
   while the Supervisor add-on runs web-only and bridges to it. Fixes state
