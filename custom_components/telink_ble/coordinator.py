@@ -13,6 +13,7 @@ so one HTTP request per poll refresh covers every entity.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import timedelta
 from typing import Any
@@ -68,6 +69,11 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Add-on request failed for {path}: {err}") from err
         except asyncio.TimeoutError as err:
             raise UpdateFailed(f"Add-on request timed out for {path}") from err
+        except (ValueError, json.JSONDecodeError) as err:
+            # non-JSON body (add-on restarting, error page, empty) — treat as
+            # UpdateFailed so a single bad poll can never wedge the coordinator
+            # and leave every entity stuck "unavailable".
+            raise UpdateFailed(f"Add-on returned non-JSON for {path}") from err
 
     async def get_lamps(self) -> list[dict]:
         data = await self._request("GET", API_LAMPS, total=10)

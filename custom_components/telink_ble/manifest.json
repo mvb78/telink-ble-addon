@@ -1,7 +1,7 @@
 {
   "domain": "telink_ble",
   "name": "Telink BLE Lights",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "config_flow": true,
   "documentation": "https://github.com/mvb78/telink-ble-addon",
   "issue_tracker": "https://github.com/mvb78/telink-ble-addon/issues",
