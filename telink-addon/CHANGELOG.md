@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.35 - 2026-09-01
+## 1.0.36 - 2026-09-01
+- Daemon no longer exits/crash-loops when all lamps are momentarily offline:
+  it stays up and the config watcher reconnects periodically. This matters for
+  the privileged sidecar (--restart would otherwise restart it forever).
 - Fix endless reload loop: the daemon only reloads when the lamp *set*
   (MAC/password/name) changes, not when its own seq writes touch lamps.json.
 - run.sh reads daemon_host/daemon_port from /data/options.json so option

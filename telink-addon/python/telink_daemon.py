@@ -323,6 +323,15 @@ async def _build_sessions() -> dict[str, DaemonSession]:
     return {mac: s for mac, s in sessions.items() if s.ctrl.session_key is not None}
 
 
+async def _build_sessions_if_any() -> dict[str, DaemonSession]:
+    """Like _build_sessions but returns {} instead of letting the daemon exit."""
+    try:
+        return await _build_sessions()
+    except Exception as e:
+        print(f"  [daemon] session build error: {e}", flush=True)
+        return {}
+
+
 async def _reload_sessions(sessions: dict[str, DaemonSession]) -> None:
     """Stop all sessions and reconnect from the current registry."""
     for s in list(sessions.values()):
@@ -379,6 +388,11 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                 print("lamps.json changed; reloading ...", flush=True)
                 await _reload_sessions(sessions)
                 last_sig = _lamps_signature()
+            elif not sessions and sig:
+                # Started with zero sessions (all lamps offline); retry the
+                # existing registry periodically instead of crash-looping.
+                print("No live sessions; attempting reconnect ...", flush=True)
+                await _reload_sessions(sessions)
 
 
 async def start_daemon():
@@ -398,12 +412,15 @@ async def start_daemon():
         lamps = registry.load()
         if not lamps:
             print("No lamps saved. Run 'discover' first.", flush=True)
-            return
-        print(f"Connecting to {len(lamps)} lamp(s) ...", flush=True)
-        sessions = await _build_sessions()
-        if not sessions:
-            print("No lamps connected. Exiting.", flush=True)
-            return
+            # Keep the server up (idle) so the web app can still reach us; the
+            # config watcher will load sessions once lamps are discovered.
+            sessions = await _build_sessions_if_any()
+        else:
+            print(f"Connecting to {len(lamps)} lamp(s) ...", flush=True)
+            sessions = await _build_sessions()
+        # Never exit on a transient "all lamps offline": stay up and let the
+        # watcher re-connect. A crash-loop here restarts the container forever.
+        print(f"Daemon ready ({len(sessions)} lamp(s)). {('TCP: ' + TCP_HOST + ':' + str(TCP_PORT)) if TCP_HOST else ('Socket: ' + SOCK_PATH)}", flush=True)
 
     async def _client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         await _handle_client(reader, writer, sessions)
