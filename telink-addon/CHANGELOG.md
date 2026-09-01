@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.26 - 2026-08-31
+- Move add-on host port mapping from 8099 to 8098: host port 8099 is taken
+  by a `ttyd` process on this installation, so the mapping silently failed
+  and the HA integration could not reach the add-on. Requires image rebuild
+  (version tag) so the container is recreated with the new mapping.
+
 ## 1.0.25 - 2026-08-31
 - Switch to **prebuilt image distribution**: `image: ghcr.io/mvb78/telink-ble-cli`
   in config.yaml; the store install now pulls the image instead of running a
