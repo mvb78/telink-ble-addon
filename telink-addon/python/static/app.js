@@ -429,16 +429,19 @@ powerSwitch.addEventListener("change", () => {
 
 async function pollPowerState() {
   // Best-effort: read the bulk status and flip the switch to match reality.
+  // NOTE: these lamps always report state:"ON"; "off" is brightness 0, so the
+  // switch must be driven by brightness, not the state field.
   const res = await api("api/command/status", {});
   if (!res.ok || !res.results || !res.results.length) return;
-  const states = res.results.map((r) => r.result && r.result.state);
-  if (states.every((s) => s === "ON")) {
+  const bri = res.results.map((r) => r.result && r.result.brightness);
+  const isOn = (b) => typeof b === "number" && b > 0;
+  if (bri.every(isOn)) {
     powerSwitch.checked = true;
     powerState.textContent = "on";
-  } else if (states.every((s) => s === "OFF")) {
+  } else if (bri.every((b) => !isOn(b))) {
     powerSwitch.checked = false;
     powerState.textContent = "off";
-  } else if (states.includes("ON")) {
+  } else {
     powerState.textContent = "mixed";
   }
 }

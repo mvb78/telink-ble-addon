@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.41 - 2026-09-01
+## 1.0.42 - 2026-09-01
+- Fix power switch: the lamps always report state "ON" (off = brightness 0),
+  so the switch was forced back to ON every poll and seemed dead. Drive the
+  switch from brightness instead.
 - Fix top-right target dropdown (no change handler - selecting did nothing).
 - Per-lamp alias: rename button, lamps show a distinct label everywhere
   (alias, or name + mesh address/MAC suffix) so the shared "Smart_mesh" name
