@@ -7,7 +7,7 @@ CHAR_PAIR_UUID    = "00010203-0405-0607-0809-0a0b0c0d1914"
 VENDOR_ID = 0x0211
 
 # Tried in order during discovery until one passes sample_s verification
-KNOWN_PASSWORDS = ["0000", "1234", "123", "8888"]
+KNOWN_PASSWORDS = ["8888"]
 
 from pathlib import Path
 import os as _os
@@ -20,7 +20,7 @@ GROUPS_FILE = str(Path(_DATA_DIR) / "groups.json")
 
 # Known passwords can be overridden via env (add-on option) without editing this file.
 _pw_env = _os.environ.get("TELINK_KNOWN_PASSWORDS")
-KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else ["0000", "1234", "123", "8888"]
+KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else ["8888"]
 
 # Scan duration in seconds during discovery (add-on option).
 SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "45"))

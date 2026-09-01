@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.31 - 2026-09-01
+- `full_access: true` (replaces privileged NET_ADMIN/NET_RAW + usb/devices):
+  the container's seccomp blocks `socket(AF_BLUETOOTH)`, so the raw HCI
+  monitor used to capture lamp responses is unavailable and status queries
+  fail. Running with full access (protection mode off) lets the HCI monitor
+  open. Requires protection mode to be disabled for this add-on.
+- Default `known_passwords` now only `8888` (faster discovery).
+
 ## 1.0.30 - 2026-09-01
 - Fix command responses inside HAOS add-on container: the raw HCI monitor
   (ATT_NOTIFY capture) is unavailable there, and the bleak notify callback
