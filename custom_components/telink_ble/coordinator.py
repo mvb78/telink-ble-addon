@@ -1,6 +1,6 @@
 """DataUpdateCoordinator that polls the Telink add-on REST API.
 
-Transport note: the add-on publishes its web UI on TCP 8099 (host network), so
+Transport note: the add-on publishes its web UI on TCP 8098 (host network), so
 the integration talks to it directly over plain HTTP. This avoids the
 Supervisor/Ingress token plumbing and works whether the add-on runs under HAOS,
 Docker, or a plain host — the config flow simply needs a reachable host:port.

@@ -1,6 +1,6 @@
 """Config flow for the Telink BLE Lights integration.
 
-The add-on publishes its web UI on TCP 8099 in the host network namespace, so
+The add-on publishes its web UI on TCP 8098 in the host network namespace, so
 the integration needs a reachable host:port. When Home Assistant runs under the
 HAOS Supervisor (or any Docker host) this is normally the HA host's own LAN IP
 or `host.docker.internal`. The flow probes a set of candidates automatically and

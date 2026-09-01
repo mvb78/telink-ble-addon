@@ -28,7 +28,7 @@ usb: true
 devices:
   - /dev/bus/usb
 ports:
-  8099/tcp: 8099
+  8099/tcp: 8098
 ports_description:
   8099/tcp: Telink web UI (fallback when Ingress is unavailable)
 options:
