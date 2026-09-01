@@ -26,7 +26,7 @@ import sys
 
 import lamp_registry as registry
 from telink_ble import TelinkController
-from config import CHAR_STATUS_UUID, LAMPS_FILE
+from config import CHAR_STATUS_UUID
 
 SOCK_PATH = "/tmp/telink-ble.sock"
 PID_PATH = "/tmp/telink-ble.pid"
@@ -336,21 +336,30 @@ async def _reload_sessions(sessions: dict[str, DaemonSession]) -> None:
     print(f"Daemon reloaded ({len(sessions)} lamp(s)).", flush=True)
 
 
+def _lamps_signature():
+    """(mac, password, name) tuple set — ignores seq-only writes by the daemon."""
+    try:
+        lamps = registry.load()
+        return sorted(
+            (lamp["mac"].upper(), lamp.get("password", ""), lamp.get("name", ""))
+            for lamp in lamps
+        )
+    except Exception:
+        return None
+
+
 async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
     """
-    Watch the pause flag and lamps.json so the daemon can be paused/resumed and
-    pick up discovery results without a restart (works for both the local
-    daemon and a remote sidecar sharing the data dir).
+    Watch the pause flag and the lamp set so the daemon can be paused/resumed
+    and pick up discovery results without a restart (works for both the local
+    daemon and a remote sidecar sharing the data dir). Reloads only when the
+    lamp *set* changes — seq updates written by this daemon are ignored.
     """
-    last_mtime = 0.0
+    last_sig = _lamps_signature()
     paused = os.path.exists(PAUSE_FILE)
     while not stop_event.is_set():
         await asyncio.sleep(2.0)
         is_paused = os.path.exists(PAUSE_FILE)
-        try:
-            mtime = os.stat(LAMPS_FILE).st_mtime
-        except OSError:
-            mtime = last_mtime
         if is_paused and not paused:
             for s in list(sessions.values()):
                 try:
@@ -359,13 +368,17 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                     pass
             sessions.clear()
             print("Daemon paused.", flush=True)
-        elif not is_paused and paused:
-            await _reload_sessions(sessions)
-        elif not is_paused and mtime != last_mtime and sessions:
-            print("lamps.json changed; reloading ...", flush=True)
-            await _reload_sessions(sessions)
-        paused = is_paused
-        last_mtime = mtime
+            paused = True
+            continue
+        if not is_paused and paused:
+            print("Daemon resuming ...", flush=True)
+            paused = False
+        if not is_paused:
+            sig = _lamps_signature()
+            if sig is not None and sig != last_sig:
+                print("lamps.json changed; reloading ...", flush=True)
+                await _reload_sessions(sessions)
+                last_sig = _lamps_signature()
 
 
 async def start_daemon():
