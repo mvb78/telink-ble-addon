@@ -1,5 +1,5 @@
 name: Telink BLE CLI
-version: "1.0.47"
+version: "1.0.48"
 slug: telink_ble_cli
 image: "ghcr.io/mvb78/telink-ble-cli"
 description: Web UI + Home Assistant bridge for Telink (Smart_qXsx) BLE mesh lamps
@@ -19,6 +19,7 @@ homeassistant_api: true
 ingress: true
 ingress_port: 8099
 ingress_stream: false
+watchdog: "http://[HOST]:[PORT:8099]/api/daemon"
 panel_icon: "mdi:lightbulb-group-outline"
 apparmor: false
 full_access: true

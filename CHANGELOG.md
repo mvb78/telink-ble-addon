@@ -1,5 +1,123 @@
 # Changelog
 
+## 1.0.48 - 2026-09-01
+- Add watchdog so the Supervisor restarts the web app if it hangs (queue
+  saturation).
+- Include the lamp MAC in status/query results so the HA integration can map
+  state back to per-lamp entities (all lamps share the "Smart_mesh" name).
+
+## 1.0.46 - 2026-09-01
+- Daemon starts its TCP/socket server immediately and connects lamps in the
+  background — a slow/wedged connect no longer blocks startup (which made the
+  add-on fall back to hanging direct-connects and saturated the web queue).
+  Watcher skips reconnect while the initial connect is running.
+
+## 1.0.45 - 2026-09-01
+- Connect via the discovered BLEDevice object instead of the address string
+  (RPA-safe, per research notes) — fixes direct connects that could hang or
+  miss a lamp after its address rotated.
+
+## 1.0.44 - 2026-09-01
+- Idle-release connections: sessions release after `TELINK_IDLE_TIMEOUT`
+  (default 120 s) of inactivity, mirroring the bench's brief-connection model.
+  Telink lamps stop advertising while connected, so holding sessions forever
+  put them in a silent state that required a power-cycle. Reconnect on demand;
+  `_reconnect` restarts the keepalive.
+
+## 1.0.43 - 2026-09-01
+- Fix single-lamp control: daemon sessions connect by exact MAC only (the
+  name-based RPA fallback attached sessions to whatever lamp was advertising,
+  so unicast `dst=<address>` hit the wrong lamp). Watcher reconnects missing
+  lamps individually every 15 s.
+
+## 1.0.42 - 2026-09-01
+- Web UI power switch driven by brightness, not the `state` field (these lamps
+  always report `state:"ON"`; off = brightness 0).
+
+## 1.0.41 - 2026-09-01
+- Fix top-right target dropdown (no change handler). Per-lamp display aliases
+  (rename button, `POST /api/lamp/<mac>/alias`) so the shared "Smart_mesh"
+  name is never ambiguous in lists/dropdowns.
+
+## 1.0.40 - 2026-09-01
+- Web UI: authentic Home Assistant look — top app bar, HA-style toggle switch
+  for power (with state reflection), HA sliders and filled/tonal buttons.
+  Light/dark follows `prefers-color-scheme`.
+
+## 1.0.39 - 2026-09-01
+- Serve HTML/JS/CSS with no-cache headers so stale browser caches can never
+  break the UI after an add-on update.
+
+## 1.0.38 - 2026-09-01
+- White temperature slider applies on release (no extra Apply button) like
+  brightness. Cache-busted static asset URLs (`?v=<version>`).
+
+## 1.0.37 - 2026-09-01
+- Web UI: Home Assistant Material 3 theme (Roboto, HA card/background/primary
+  colors); removed the Color section (lamps are tunable-white only).
+
+## 1.0.36 - 2026-09-01
+- Daemon no longer exits/crash-loops when all lamps are momentarily offline:
+  it stays up and the config watcher reconnects periodically. Important for
+  the privileged sidecar (`--restart` would otherwise restart it forever).
+
+## 1.0.35 - 2026-09-01
+- Daemon reload only on lamp-set change (MAC/password/name), not when its own
+  seq writes touch lamps.json (an mtime-based watcher caused an endless
+  reload loop that dropped sessions).
+
+## 1.0.34 - 2026-09-01
+- run.sh reads `daemon_host`/`daemon_port` from `/data/options.json` so option
+  changes apply without recreating the container (CONFIG_* env is only
+  injected at creation).
+
+## 1.0.33 - 2026-09-01
+- **Variant B**: split BLE daemon from web UI. The daemon can run as a
+  privileged sidecar container listening on TCP (`TELINK_DAEMON_HOST`/`PORT`),
+  while the Supervisor add-on runs web-only and bridges to it. Fixes state
+  readback where the add-on container's seccomp blocks the raw HCI monitor
+  (`socket(AF_BLUETOOTH)` → Errno 97). Adds `daemon_host`/`daemon_port`
+  options, `run_daemon.sh` entrypoint, and a pause/reload watcher in the
+  daemon (honors the shared `daemon_paused` flag + re-reads lamps.json).
+
+## 1.0.32 - 2026-09-01
+- Remove the bleak `start_notify` fallback — these lamps reject CCCD writes
+  (ATT 0x0e) and drop the connection, so subscribing via bleak killed the
+  session before login completed. Control commands (no response needed) work
+  again; notify readback stays unavailable where the container blocks
+  AF_BLUETOOTH (fixed properly by Variant B).
+
+## 1.0.31 - 2026-09-01
+- `full_access: true` (replaces privileged NET_ADMIN/NET_RAW + usb/devices) —
+  tried to lift the seccomp that blocks `socket(AF_BLUETOOTH)`; didn't help on
+  this Supervisor, superseded by Variant B. Default `known_passwords` is now
+  just `8888` (faster discovery).
+
+## 1.0.30 - 2026-09-01
+- Re-pull fixed image (bumped tag so the store re-pulls after a bad 1.0.29).
+
+## 1.0.29 - 2026-09-01
+- Log per-password probe errors during discovery instead of silently returning
+  None (debug aid; superseded).
+
+## 1.0.28 - 2026-09-01
+- Debug: log per-password probe errors in discovery.
+
+## 1.0.27 - 2026-09-01
+- Default `known_passwords` includes `8888` (the Smart_qXsx mesh password),
+  both in the config option and the code fallback.
+
+## 1.0.26 - 2026-09-01
+- Move add-on host port mapping from 8099 to 8098 (host 8099 was taken by a
+  `ttyd` process, so the mapping silently failed and the integration could not
+  reach the add-on).
+
+## 1.0.25 - 2026-08-31
+- Switch to **prebuilt image distribution**: `image: ghcr.io/mvb78/telink-ble-cli`
+  in config.yaml; the store install now pulls the image instead of running a
+  local docker buildx build (which silently hangs on Supervisor 7.x/HAOS 6.1).
+- Dockerfile: add `io.hass.*` + OCI labels per the 2026 builder-migration docs.
+
 ## 1.0.24 - 2026-08-31
 - Fix `wait_for_opcode` (`telink_ble.py`) to also match **mesh-layer** responses:
   frames decrypted by `decrypt_mesh_notification` start with `op|0xC0` at byte 0

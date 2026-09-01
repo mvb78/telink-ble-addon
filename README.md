@@ -3,10 +3,11 @@
 Home Assistant OS add-on + companion Home Assistant integration for **Telink
 TLSR private-mesh BLE lamps** (BT-Light / Smart_nSpq / Smart_qXsx).
 
-- **Add-on** (`telink-addon/`) — runs the Telink BLE daemon + web UI in a
-  Supervisor container, using the host's Bluetooth stack (built-in or USB).
-  Provides a full standalone web UI (on/off, brightness, color temp, scenes,
-  discovery) reachable via Ingress.
+- **Add-on** (`telink-addon/`) — runs the Flask web UI in a Supervisor
+  container (port 8098 / Ingress). The BLE daemon runs as a **privileged
+  sidecar container** (Variant B) that owns the Bluetooth connections, because
+  the add-on's own container can't open the raw `AF_BLUETOOTH` socket (seccomp
+  Errno 97) that the HCI-monitor notify readback needs.
 - **Companion integration** (`custom_components/telink_ble/`) — polls the
   add-on's REST API and exposes each lamp and group as native `light.*`
   entities (tunable white only, Kelvin color-temperature API).
@@ -43,10 +44,35 @@ _MIT licensed — see [LICENSE](LICENSE)._
 1. Home Assistant → **Settings → System → Add-ons → Add-on store → ⋮ → Repositories**
 2. Add: `https://github.com/mvb78/telink-ble-addon`
 3. Install **Telink BLE CLI**, set options if needed:
-   - `known_passwords` — comma-separated mesh passwords (default `0000,1234,123`)
+   - `known_passwords` — comma-separated mesh passwords (default `8888`)
    - `scan_timeout` — discovery scan seconds (default `45`)
+   - `daemon_host` / `daemon_port` — set `daemon_host` to `172.30.32.1` (and
+     `daemon_port` to `8097`) only when running the BLE daemon as a privileged
+     sidecar (Variant B, see [docs/INSTALL_HAOS.md](docs/INSTALL_HAOS.md)).
 4. **Start** the add-on, open **Web UI**, and click **Discover** to find your
    lamps (the phone app must be disconnected).
+
+### Variant B sidecar (required for state readback in the add-on container)
+
+On this Supervisor the add-on's seccomp blocks `socket(AF_BLUETOOTH)`, so the
+daemon must run in a `--privileged` Docker container on the HAOS host (get
+Docker access via the community **Advanced SSH & Web Terminal** add-on with
+protection mode off):
+
+```bash
+docker run -d --name telink-daemon \
+  --privileged --network host \
+  -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
+  -v /mnt/data/supervisor/apps/data/c4c18bb5_telink_ble_cli:/data \
+  -e TELINK_DATA_DIR=/data -e TELINK_KNOWN_PASSWORDS=8888 \
+  -e TELINK_DAEMON_HOST=0.0.0.0 -e TELINK_DAEMON_PORT=8097 \
+  --restart unless-stopped \
+  ghcr.io/mvb78/telink-ble-cli:1.0.47 python3 telink_daemon.py
+```
+
+Then set `daemon_host: 172.30.32.1` in the add-on options and restart the
+add-on. See [docs/INSTALL_HAOS.md](docs/INSTALL_HAOS.md) for the full
+walkthrough (incl. finding the add-on's `/data` host path).
 
 ## Install the companion integration
 
@@ -56,7 +82,7 @@ _MIT licensed — see [LICENSE](LICENSE)._
 2. URL: `https://github.com/mvb78/telink-ble-addon`
 3. Download, then restart Home Assistant.
 4. **Settings → Devices & Services → Add Integration → Telink BLE Lights**.
-   The flow probes the add-on host automatically (port 8099).
+   The flow probes the add-on host automatically (port 8098).
 
 **Option B — manual**:
 
@@ -73,7 +99,7 @@ Then restart Home Assistant and add the integration as above.
 
 ## Details
 
-- Full standalone web UI (daemon + waitress on Ingress port 8099).
+- Full standalone web UI (daemon + waitress on Ingress port 8099; host port 8098).
 - Add-on options reach the container as `CONFIG_*` Supervisor env vars and are
   mapped to the package's `TELINK_*` settings; data persists in `/data`.
 - Group lights are addressed via a single mesh packet to the group's address

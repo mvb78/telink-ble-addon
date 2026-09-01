@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.47 - 2026-09-01
+## 1.0.48 - 2026-09-01
+- Add watchdog (http://[HOST]:[PORT:8099]/api/daemon) so the Supervisor
+  restarts the web app if it ever hangs again (queue saturation).
 - Include the lamp MAC in status/query results so the HA integration can map
   state back to per-lamp entities (all lamps share the "Smart_mesh" name).
 - Daemon starts its TCP/socket server immediately and connects lamps in the
