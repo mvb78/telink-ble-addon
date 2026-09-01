@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.29 - 2026-09-01
+## 1.0.30 - 2026-09-01
 - Fix command responses inside HAOS add-on container: the raw HCI monitor
   (ATT_NOTIFY capture) is unavailable there, and the bleak notify callback
   was never subscribed, so status/command responses never arrived. Fall back
