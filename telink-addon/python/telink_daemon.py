@@ -357,6 +357,16 @@ def _lamps_signature():
         return None
 
 
+def _missing_lamp_entries(sessions: dict[str, DaemonSession]) -> list[dict]:
+    """Registry lamps that don't have a live session yet."""
+    try:
+        lamps = registry.load()
+    except Exception:
+        return []
+    present = {mac.upper() for mac in sessions}
+    return [l for l in lamps if l["mac"].upper() not in present]
+
+
 async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
     """
     Watch the pause flag and the lamp set so the daemon can be paused/resumed
@@ -366,6 +376,7 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
     """
     last_sig = _lamps_signature()
     paused = os.path.exists(PAUSE_FILE)
+    next_reconnect = 0.0
     while not stop_event.is_set():
         await asyncio.sleep(2.0)
         is_paused = os.path.exists(PAUSE_FILE)
@@ -388,11 +399,30 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                 print("lamps.json changed; reloading ...", flush=True)
                 await _reload_sessions(sessions)
                 last_sig = _lamps_signature()
-            elif not sessions and sig:
-                # Started with zero sessions (all lamps offline); retry the
-                # existing registry periodically instead of crash-looping.
-                print("No live sessions; attempting reconnect ...", flush=True)
-                await _reload_sessions(sessions)
+            else:
+                # Reconnect registry lamps that don't have a session (they were
+                # not advertising when we tried, or a session dropped). Connect
+                # by exact MAC so sessions always map to the right lamp.
+                now = asyncio.get_event_loop().time()
+                if now >= next_reconnect:
+                    missing = _missing_lamp_entries(sessions)
+                    if missing:
+                        next_reconnect = now + 15.0
+                        for lamp in missing:
+                            mac = lamp["mac"].upper()
+                            print(f"Reconnecting missing lamp {mac} ...", flush=True)
+                            sess = DaemonSession(lamp)
+                            try:
+                                await sess.start()
+                                sessions[mac] = sess
+                                print(f"  [{lamp['name']}] reconnected", flush=True)
+                            except Exception as e:
+                                try:
+                                    await sess.stop()
+                                except Exception:
+                                    pass
+                                print(f"  [{lamp['name']}] reconnect failed: {e}", flush=True)
+                        last_sig = _lamps_signature()
 
 
 async def start_daemon():

@@ -99,23 +99,13 @@ class TelinkController:
     async def connect(self):
         print(f"  Scanning for {self.name} ({self.mac}) ...")
         target = None
-        # RPA fallback: TLSR rotates random private address (BLTC...md:624) — static MAC may have changed.
-        # Vendor filter keeps scan valid even after rotation.
-        fallback = None
 
         def callback(device, adv):
-            nonlocal target, fallback
+            nonlocal target
             if target:
                 return
             if device.address.upper() == self.mac:
                 target = device
-                return
-            # RPA fallback: same BLE name + vendor ID 0x0211, capture as fallback if exact MAC not seen
-            uuids = [str(u).lower() for u in (adv.service_uuids or [])]
-            has_service_uuid = SERVICE_UUID.lower() in uuids
-            has_telink_mfr = VENDOR_ID in (adv.manufacturer_data or {})
-            if (has_service_uuid or has_telink_mfr) and (device.name or "") == self.name and fallback is None:
-                fallback = device
 
         async with BleakScanner(callback) as scanner:
             for _ in range(6):
@@ -123,12 +113,11 @@ class TelinkController:
                 if target:
                     break
 
-        if not target and fallback is not None:
-            print(f"  [warn] RPA fallback: {self.mac} not found, using {fallback.address} ({fallback.name}) with same name+vendor")
-            target = fallback
-
         if not target:
-            raise Exception(f"{self.mac} not found — is the phone app disconnected? (RPA fallback also failed; try `discover` to refresh MAC)")
+            raise Exception(
+                f"{self.mac} not found — is the phone app disconnected? "
+                f"(try `discover` to refresh the MAC)"
+            )
 
         # Open the HCI monitor socket before connecting so we don't miss the
         # first notification burst that arrives right after login.

@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.0.42 - 2026-09-01
+## 1.0.43 - 2026-09-01
+- Fix single-lamp control: daemon sessions now connect by exact MAC only (the
+  name-based RPA fallback attached sessions to whatever lamp was advertising,
+  so unicast dst=<address> hit the wrong lamp and per-lamp control failed).
+  Watcher reconnects missing lamps individually every 15s instead of reloading
+  everything.
 - Fix power switch: the lamps always report state "ON" (off = brightness 0),
   so the switch was forced back to ON every poll and seemed dead. Drive the
   switch from brightness instead.
