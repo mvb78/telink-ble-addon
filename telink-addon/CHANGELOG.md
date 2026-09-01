@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.31 - 2026-09-01
+## 1.0.32 - 2026-09-01
 - `full_access: true` (replaces privileged NET_ADMIN/NET_RAW + usb/devices):
   the container's seccomp blocks `socket(AF_BLUETOOTH)`, so the raw HCI
   monitor used to capture lamp responses is unavailable and status queries

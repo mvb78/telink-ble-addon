@@ -138,22 +138,11 @@ class TelinkController:
                 self._hci_monitor_loop()
             )
         else:
-            print("  [warn] HCI monitor unavailable; falling back to bleak notify", flush=True)
+            print("  [warn] HCI monitor unavailable; notify readback disabled", flush=True)
 
         self.client = BleakClient(target.address)
         await self.client.connect()
         await asyncio.sleep(0.5)
-
-        # Without the raw HCI monitor we cannot capture ATT_NOTIFY at the HCI
-        # layer. Fall back to a bleak subscription so command responses still
-        # arrive. Some Telink firmware dislikes CCCD writes; if the lamp drops
-        # the connection here, login() will surface it.
-        if not self._monitor_sock:
-            try:
-                await self.client.start_notify(CHAR_NOTIFY_UUID, self._on_bleak_notify)
-                print("  [warn] bleak notify subscription active (fallback)", flush=True)
-            except Exception as err:
-                print(f"  [warn] bleak start_notify failed: {type(err).__name__}: {err}", file=sys.stderr, flush=True)
 
     async def disconnect(self):
         if self._monitor_task:
