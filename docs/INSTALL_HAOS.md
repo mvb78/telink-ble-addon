@@ -23,7 +23,7 @@ telink-ble-addon/
 
 - Home Assistant OS (or Supervised) with a Bluetooth adapter. Built-in BT or a
   USB dongle both work — the add-on uses the **host's** Bluetooth stack.
-  (`host_dbus: true` + `usb: true` in the add-on manifest.)
+  (`host_dbus: true` + `full_access: true` in the add-on manifest.)
 - The phone/lamp app must be **disconnected** from the lamps.
 
 ---
@@ -43,9 +43,12 @@ telink-ble-addon/
 3. The **Telink BLE CLI** add-on appears. Click it → **Install**.
 4. Optional, before starting:
    - **known_passwords** — comma-separated list of mesh passwords to try during
-     discovery (default `0000,1234,123`). Add yours if your lamps use a different
+     discovery (default `8888`). Add yours if your lamps use a different
      password.
    - **scan_timeout** — seconds to scan during discovery (default `45`).
+   - **daemon_host / daemon_port** — leave empty for the normal single-container
+     mode. Set `daemon_host` only if you run the BLE daemon as a privileged
+     sidecar (see [Variant B](#variant-b-privileged-sidecar-daemon) below).
 5. Start the add-on. On first run there are no saved lamps, so the daemon starts,
    sees an empty lamp database and waits (it retries every few seconds).
 
@@ -81,7 +84,7 @@ telink-ble-addon/
 3. Go to **Settings → Devices & Services → Add Integration**, search for
    **Telink BLE Lights**.
 4. The flow pre-fills the add-on host. The add-on publishes its API on port
-   **8099** in the host network namespace, so the integration normally uses the
+   **8098** in the host network namespace, so the integration normally uses the
    HA host's own LAN IP (or `host.docker.internal`, or `127.0.0.1` as a last
    resort). The flow probes candidates in order; adjust host/port if needed.
    Then **Submit** — it verifies connectivity before creating the entry.
@@ -109,7 +112,7 @@ the Ingress web UI is separate.
 | Per-lamp `light` entity    | Tunable white only, 2700 K (warm) – 6500 K (cool); polled via bulk status |
 | Per-group `light` entity   | Mesh group addressed via a single packet → very fast, but assumed state   |
 | `light` color mode         | `ColorMode.COLOR_TEMP` — the lamps have **no RGB** capability             |
-| Add-on REST / web UI       | `port 8099`; full UI via Ingress or `http://<host>:8099`                  |
+| Add-on REST / web UI       | `port 8098`; full UI via Ingress or `http://<host>:8098`                  |
 
 Notes:
 
@@ -119,3 +122,57 @@ Notes:
   2026.3): 2700 K ⇔ warm end, 6500 K ⇔ cool end.
 - The add-on and its daemon hold the single allowed BLE connection to each lamp.
   **Only one client** (phone app or add-on) may talk to a lamp at a time.
+
+---
+
+## Variant B: privileged sidecar daemon
+
+The add-on's container runs under the Supervisor's **seccomp profile**, which on
+some Supervisors still blocks the raw `AF_BLUETOOTH` socket even with
+`full_access: true` + protection mode off. Symptom (add-on log):
+
+```
+[warn] HCI monitor: socket(AF_BLUETOOTH) failed: [Errno 97] Address family not supported by protocol
+```
+
+Without the HCI monitor the daemon cannot capture the lamps' ATT_NOTIFY
+responses, so **state readback** (status polling) fails — commands still work.
+If you see this, run the BLE daemon as a privileged sidecar container on the
+same HAOS host and let the add-on bridge to it over TCP:
+
+1. **Get Docker access on the host** — install the community **"Advanced SSH &
+   Web Terminal"** add-on from the store and turn its **protection mode OFF**
+   (Configuration tab). It exposes the host Docker socket.
+2. **Find the add-on's data dir on the host** (its `/data` lives here; both
+   processes must share `lamps.json` and the pause flag):
+   ```bash
+   docker inspect app_c4c18bb5_telink_ble_cli --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}'
+   ```
+3. **Run the sidecar daemon** (privileged → seccomp off → HCI monitor works):
+   ```bash
+   docker run -d --name telink-daemon \
+     --privileged --network host \
+     -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
+     -v "<ADDON_DATA_PATH>":/data \
+     -e TELINK_DATA_DIR=/data \
+     -e TELINK_KNOWN_PASSWORDS=8888 \
+     -e TELINK_DAEMON_HOST=0.0.0.0 \
+     -e TELINK_DAEMON_PORT=8097 \
+     --restart unless-stopped \
+     ghcr.io/mvb78/telink-ble-cli:<VERSION> \
+     python3 telink_daemon.py
+   ```
+   Replace `<ADDON_DATA_PATH>` with the path from step 2 and `<VERSION>` with
+   the current add-on version (1.0.33+). Confirm it connected to the lamps:
+   `docker logs telink-daemon`.
+4. **Point the add-on at the sidecar** — in the Telink BLE CLI add-on
+   Configuration set `daemon_host` to `172.30.32.1` (the host gateway from the
+   add-on's network) and `daemon_port` to `8097`, then restart the add-on. It now
+   runs web-only and bridges every command to the sidecar. Status readback works.
+
+The daemon watches the shared `lamps.json` and `daemon_paused` flag, so
+**Discover** in the add-on UI still works (it pauses the sidecar, scans, saves,
+and the sidecar reloads).
+
+> Note: the web UI and the HA integration still connect to the **add-on** on
+> port 8098/Ingress as usual — only the BLE layer moved to the sidecar.
