@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 - 2026-09-01
+- 1.1.x series: production state (Variant B sidecar, groups, HA integration).
+  Changes in 1.0.25-1.0.48 are rolled into this release line.
+
 ## 1.0.48 - 2026-09-01
 - Add watchdog (http://[HOST]:[PORT:8099]/api/daemon) so the Supervisor
   restarts the web app if it ever hangs again (queue saturation).

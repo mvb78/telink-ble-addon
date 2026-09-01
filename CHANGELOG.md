@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0 - 2026-09-01
+- 1.1.x production series (Variant B sidecar, groups, HA integration);
+  rolls up 1.0.25-1.0.48.
+
 ## 1.0.48 - 2026-09-01
 - Add watchdog so the Supervisor restarts the web app if it hangs (queue
   saturation).
