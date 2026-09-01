@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.36 - 2026-09-01
+## 1.0.37 - 2026-09-01
+- Web UI: restyle to the Home Assistant Material 3 look (Roboto, HA dark
+  card theme) and remove the Color section (lamps are tunable-white only).
 - Daemon no longer exits/crash-loops when all lamps are momentarily offline:
   it stays up and the config watcher reconnects periodically. This matters for
   the privileged sidecar (--restart would otherwise restart it forever).

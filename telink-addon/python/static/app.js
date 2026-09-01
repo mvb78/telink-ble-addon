@@ -49,14 +49,6 @@ async function api(path, body, method) {
   }
 }
 
-function hexToRgb(hex) {
-  return {
-    r: parseInt(hex.slice(1, 3), 16),
-    g: parseInt(hex.slice(3, 5), 16),
-    b: parseInt(hex.slice(5, 7), 16),
-  };
-}
-
 // ── target selection ─────────────────────────────────────────────────────
 
 function setTarget(target, label, sub) {
@@ -357,21 +349,14 @@ document.querySelectorAll("button.cmd").forEach((btn) => {
     switch (cmd) {
       case "colortemp":
         await sendCmd("colortemp", { value: +$("ct-slider").value }); break;
-      case "rgb": {
-        const { r, g, b } = hexToRgb($("rgb-picker").value);
-        await sendCmd("rgb", { r, g, b }); break;
-      }
       case "scene":
         await sendCmd("scene", { id: +$("scene-id").value }); break;
-      case "scene-add": {
-        const { r, g, b } = hexToRgb($("rgb-picker").value);
+      case "scene-add":
         await sendCmd("scene-add", {
           id: +$("scene-id").value,
           brightness: +$("brightness-slider").value,
-          r, g, b,
           ct: +$("ct-slider").value,
         }); break;
-      }
       case "scene-del":
         await sendCmd("scene-del", { id: +$("scene-id").value }); break;
       case "scene-clear":
@@ -395,23 +380,6 @@ $("brightness-slider").addEventListener("change", (e) => {
 
 $("ct-slider").addEventListener("input", (e) => {
   $("ct-val").textContent = e.target.value;
-});
-
-// color swatches
-const SWATCHES = ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#ff00ff",
-  "#00ffff", "#ff8000", "#ffffff", "#ff6699", "#66ffcc"];
-const swatches = $("swatches");
-SWATCHES.forEach((c) => {
-  const b = document.createElement("button");
-  b.className = "swatch";
-  b.style.background = c;
-  b.title = c;
-  b.onclick = () => {
-    $("rgb-picker").value = c;
-    const { r, g, b: bb } = hexToRgb(c);
-    sendCmd("rgb", { r, g, b: bb });
-  };
-  swatches.appendChild(b);
 });
 
 // scene dropdown 1..16
