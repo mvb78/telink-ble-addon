@@ -64,15 +64,23 @@ def _open_hci_monitor() -> socket.socket | None:
     """
     try:
         sock = socket.socket(_AF_BLUETOOTH, socket.SOCK_RAW, _BTPROTO_HCI)
+    except OSError as err:
+        print(f"  [warn] HCI monitor: socket(AF_BLUETOOTH) failed: {err}", file=sys.stderr, flush=True)
+        return None
+    try:
         addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
         ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
-        if ret != 0:
-            sock.close()
-            return None
-        sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
-        return sock
-    except Exception:
+    except OSError as err:
+        print(f"  [warn] HCI monitor: bind failed: {err}", file=sys.stderr, flush=True)
+        sock.close()
         return None
+    if ret != 0:
+        err = ctypes.get_errno()
+        print(f"  [warn] HCI monitor: bind errno={err} ({os.strerror(err)})", file=sys.stderr, flush=True)
+        sock.close()
+        return None
+    sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
+    return sock
 
 
 class TelinkController:
@@ -130,12 +138,22 @@ class TelinkController:
                 self._hci_monitor_loop()
             )
         else:
-            print("  [warn] HCI monitor unavailable (needs CAP_NET_ADMIN)")
-            print("         run with sudo, or once: sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f .venv/bin/python3)")
+            print("  [warn] HCI monitor unavailable; falling back to bleak notify", flush=True)
 
         self.client = BleakClient(target.address)
         await self.client.connect()
         await asyncio.sleep(0.5)
+
+        # Without the raw HCI monitor we cannot capture ATT_NOTIFY at the HCI
+        # layer. Fall back to a bleak subscription so command responses still
+        # arrive. Some Telink firmware dislikes CCCD writes; if the lamp drops
+        # the connection here, login() will surface it.
+        if not self._monitor_sock:
+            try:
+                await self.client.start_notify(CHAR_NOTIFY_UUID, self._on_bleak_notify)
+                print("  [warn] bleak notify subscription active (fallback)", flush=True)
+            except Exception as err:
+                print(f"  [warn] bleak start_notify failed: {type(err).__name__}: {err}", file=sys.stderr, flush=True)
 
     async def disconnect(self):
         if self._monitor_task:

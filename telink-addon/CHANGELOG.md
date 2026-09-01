@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.29 - 2026-09-01
+- Fix command responses inside HAOS add-on container: the raw HCI monitor
+  (ATT_NOTIFY capture) is unavailable there, and the bleak notify callback
+  was never subscribed, so status/command responses never arrived. Fall back
+  to a bleak subscription when the HCI monitor is unavailable; log the monitor
+  failure reason for diagnostics.
+
 ## 1.0.28 - 2026-09-01
 - Log per-password probe errors during discovery instead of silently returning
   None, so container BLE failures are visible in the add-on log.
