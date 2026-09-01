@@ -292,6 +292,22 @@ def api_lamps():
     return jsonify(registry.load() or [])
 
 
+@app.route("/api/lamp/<mac>/alias", methods=["POST"])
+def api_lamp_alias(mac):
+    """Set a display alias for a lamp (all lamps share the mesh name, so an
+    alias makes them distinguishable in lists/dropdowns). POST {"name": "..."}.
+    """
+    data = request.get_json(silent=True) or {}
+    alias = (data.get("name") or "").strip()
+    lamps = registry.load()
+    lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+    if not lamp:
+        return jsonify({"ok": False, "msg": f"lamp {mac} not in registry"}), 404
+    lamp["alias"] = alias or None
+    registry.save(lamps)
+    return jsonify({"ok": True, "alias": lamp.get("alias")})
+
+
 @app.route("/api/lamp/<mac>/seq", methods=["POST"])
 def api_lamp_seq(mac):
     """Seed a lamp's persisted last_seq (dedup-window rescue).

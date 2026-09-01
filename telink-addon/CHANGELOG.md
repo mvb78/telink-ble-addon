@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.0.40 - 2026-09-01
+## 1.0.41 - 2026-09-01
+- Fix top-right target dropdown (no change handler - selecting did nothing).
+- Per-lamp alias: rename button, lamps show a distinct label everywhere
+  (alias, or name + mesh address/MAC suffix) so the shared "Smart_mesh" name
+  no longer makes dropdowns ambiguous. New POST /api/lamp/<mac>/alias.
 - Web UI: authentic HA look — top app bar, HA-style toggle switch for power
   (with state reflection via status poll), HA sliders and filled/tonal buttons.
   Light/dark follows the browser/HA preference automatically.

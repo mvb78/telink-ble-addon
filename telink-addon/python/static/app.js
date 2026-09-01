@@ -71,6 +71,27 @@ function syncSelector() {
   if ([...targetSel.options].some((o) => o.value === val)) targetSel.value = val;
 }
 
+// Distinguishing label for a lamp (all share the mesh name).
+function lampLabel(l) {
+  if (l.alias) return l.alias;
+  const base = l.name || l.mac;
+  if (l.mesh_address) return `${base} · addr ${l.mesh_address}`;
+  return `${base} · ${l.mac.slice(-5)}`;
+}
+
+targetSel.addEventListener("change", () => {
+  const v = targetSel.value;
+  if (v === "all") { setTarget(null, "All lamps", "every saved lamp"); return; }
+  if (v.startsWith("group:")) {
+    const name = v.slice(6);
+    const g = groups.find((x) => x.name === name);
+    if (g) setTarget({ type: "group", name: g.name, address: g.address }, g.name, `group @ 0x${g.address.toString(16).toUpperCase()}`);
+    return;
+  }
+  const l = lamps.find((x) => x.mac === v);
+  if (l) selectLamp(l);
+});
+
 function cmdBody() {
   if (!activeTarget) return {};
   if (activeTarget.type === "lamp") return { mac: activeTarget.mac };
@@ -106,7 +127,7 @@ async function loadLamps() {
     const li = document.createElement("li");
     li.className = "lamp-item";
     li.dataset.mac = l.mac;
-    const label = l.name || l.mac;
+    const label = lampLabel(l);
 
     const name = document.createElement("span");
     name.className = "name";
@@ -152,7 +173,20 @@ async function loadLamps() {
       if (res.ok) loadLamps();
     };
 
-    li.append(name, onBtn, offBtn, addrInput, assignBtn);
+    const renameBtn = document.createElement("button");
+    renameBtn.className = "mini del";
+    renameBtn.textContent = "\u270e";
+    renameBtn.title = "Rename this lamp (alias)";
+    renameBtn.onclick = async (e) => {
+      e.stopPropagation();
+      const alias = prompt("Name this lamp (leave empty to clear):", l.alias || "");
+      if (alias === null) return;
+      const res = await api(`api/lamp/${l.mac}/alias`, { name: alias });
+      log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || "alias set"}`);
+      if (res.ok) loadLamps();
+    };
+
+    li.append(name, onBtn, offBtn, renameBtn, addrInput, assignBtn);
     lampList.appendChild(li);
 
     const opt = document.createElement("option");
@@ -164,7 +198,7 @@ async function loadLamps() {
 
 function selectLamp(l) {
   setTarget({ type: "lamp", mac: l.mac, name: l.name || l.mac },
-    l.name || l.mac, `${l.mac} · password ${l.password}`);
+    lampLabel(l), `${l.mac} · password ${l.password}`);
 }
 
 async function quickToggle(lamp, stateOn) {
@@ -231,7 +265,7 @@ groupCreateForm.addEventListener("submit", async (e) => {
 
 function macLabel(mac) {
   const l = lamps.find((x) => x.mac === mac);
-  return l ? (l.name || l.mac) : mac;
+  return l ? lampLabel(l) : mac;
 }
 
 function renderMembership() {
@@ -301,7 +335,7 @@ function renderGroupEdit() {
     addable.forEach((l) => {
       const opt = document.createElement("option");
       opt.value = l.mac;
-      opt.textContent = l.name || l.mac;
+      opt.textContent = lampLabel(l);
       groupAddLamp.appendChild(opt);
     });
     groupAddBtn.disabled = false;
