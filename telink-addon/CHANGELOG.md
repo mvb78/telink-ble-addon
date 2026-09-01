@@ -1,6 +1,10 @@
 # Changelog
 
-## 1.0.45 - 2026-09-01
+## 1.0.46 - 2026-09-01
+- Daemon starts its TCP/socket server immediately and connects lamps in the
+  background — a slow/wedged connect no longer blocks startup (which made the
+  add-on fall back to hanging direct-connects and saturated the web queue).
+  Watcher skips reconnect while the initial connect is running.
 - Connect via the discovered BLEDevice object instead of the address string
   (RPA-safe, per research notes) — fixes direct connects that could hang or
   miss a lamp after its address rotated.

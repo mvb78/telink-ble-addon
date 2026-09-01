@@ -332,15 +332,6 @@ async def _build_sessions() -> dict[str, DaemonSession]:
     return {mac: s for mac, s in sessions.items() if s.ctrl.session_key is not None}
 
 
-async def _build_sessions_if_any() -> dict[str, DaemonSession]:
-    """Like _build_sessions but returns {} instead of letting the daemon exit."""
-    try:
-        return await _build_sessions()
-    except Exception as e:
-        print(f"  [daemon] session build error: {e}", flush=True)
-        return {}
-
-
 async def _reload_sessions(sessions: dict[str, DaemonSession]) -> None:
     """Stop all sessions and reconnect from the current registry."""
     for s in list(sessions.values()):
@@ -376,7 +367,8 @@ def _missing_lamp_entries(sessions: dict[str, DaemonSession]) -> list[dict]:
     return [l for l in lamps if l["mac"].upper() not in present]
 
 
-async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
+async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event,
+                        connect_busy: asyncio.Event | None = None) -> None:
     """
     Watch the pause flag and the lamp set so the daemon can be paused/resumed
     and pick up discovery results without a restart (works for both the local
@@ -411,9 +403,10 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
             else:
                 # Reconnect registry lamps that don't have a session (they were
                 # not advertising when we tried, or a session dropped). Connect
-                # by exact MAC so sessions always map to the right lamp.
+                # by exact MAC so sessions always map to the right lamp. Skip
+                # while the initial background connect is still running.
                 now = asyncio.get_event_loop().time()
-                if now >= next_reconnect:
+                if now >= next_reconnect and not (connect_busy and connect_busy.is_set()):
                     missing = _missing_lamp_entries(sessions)
                     if missing:
                         next_reconnect = now + 15.0
@@ -458,26 +451,16 @@ async def start_daemon():
     if os.path.exists(SOCK_PATH):
         os.unlink(SOCK_PATH)
 
-    if os.path.exists(PAUSE_FILE):
-        # Stay up but idle (no sessions) so pause/resume still works over the socket.
-        sessions: dict[str, DaemonSession] = {}
-    else:
-        lamps = registry.load()
-        if not lamps:
-            print("No lamps saved. Run 'discover' first.", flush=True)
-            # Keep the server up (idle) so the web app can still reach us; the
-            # config watcher will load sessions once lamps are discovered.
-            sessions = await _build_sessions_if_any()
-        else:
-            print(f"Connecting to {len(lamps)} lamp(s) ...", flush=True)
-            sessions = await _build_sessions()
-        # Never exit on a transient "all lamps offline": stay up and let the
-        # watcher re-connect. A crash-loop here restarts the container forever.
-        print(f"Daemon ready ({len(sessions)} lamp(s)). {('TCP: ' + TCP_HOST + ':' + str(TCP_PORT)) if TCP_HOST else ('Socket: ' + SOCK_PATH)}", flush=True)
+    sessions: dict[str, DaemonSession] = {}
+    lamps = registry.load()
+    has_lamps = bool(lamps)
 
     async def _client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         await _handle_client(reader, writer, sessions)
 
+    # Start the server FIRST so the web app can reach us immediately. The
+    # initial lamp connect runs in the background and never blocks startup
+    # (a wedged/slow connect must not make every add-on request hang).
     if TCP_HOST:
         server = await asyncio.start_server(_client, TCP_HOST, TCP_PORT)
         print(f"Daemon ready ({len(sessions)} lamp(s)). TCP: {TCP_HOST}:{TCP_PORT}", flush=True)
@@ -485,6 +468,21 @@ async def start_daemon():
         server = await asyncio.start_unix_server(_client, path=SOCK_PATH)
         os.chmod(SOCK_PATH, 0o600)
         print(f"Daemon ready ({len(sessions)} lamp(s)). Socket: {SOCK_PATH}", flush=True)
+
+    connect_busy = asyncio.Event()
+    if not os.path.exists(PAUSE_FILE) and has_lamps:
+        print(f"Connecting to {len(lamps)} lamp(s) in background ...", flush=True)
+
+        async def _initial():
+            connect_busy.set()
+            try:
+                new = await _build_sessions()
+                sessions.update(new)
+                print(f"Initial connect done ({len(new)} lamp(s)).", flush=True)
+            finally:
+                connect_busy.clear()
+
+        asyncio.get_event_loop().create_task(_initial())
 
     loop = asyncio.get_event_loop()
     stop_event = asyncio.Event()
@@ -496,7 +494,7 @@ async def start_daemon():
         loop.add_signal_handler(sig, _on_signal)
 
     watcher = asyncio.get_event_loop().create_task(
-        _watch_config(sessions, stop_event)
+        _watch_config(sessions, stop_event, connect_busy)
     )
     idle_sweeper = asyncio.get_event_loop().create_task(
         _idle_sweeper(sessions, stop_event)
