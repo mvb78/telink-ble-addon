@@ -132,11 +132,11 @@ async def _query(opcode, params, response_opcode, parse_fn, targets):
             await ctrl.send_command(opcode, params, BROADCAST)
             pkt = await ctrl.wait_for_opcode(response_opcode, timeout=3.0)
             if pkt:
-                results.append({"lamp": lamp["name"], "result": parse_fn(pkt)})
+                results.append({"mac": lamp["mac"], "lamp": lamp["name"], "result": parse_fn(pkt)})
             else:
-                results.append({"lamp": lamp["name"], "result": "no response"})
+                results.append({"mac": lamp["mac"], "lamp": lamp["name"], "result": "no response"})
         except Exception as e:
-            results.append({"lamp": lamp["name"], "error": str(e)})
+            results.append({"mac": lamp["mac"], "lamp": lamp["name"], "error": str(e)})
         finally:
             await ctrl.disconnect()
     return results
@@ -170,7 +170,7 @@ def _query_route(opcode, params, response_opcode, parse_fn, targets, data):
                 parsed = parse_fn(bytes(r["payload"]))
             except Exception as e:
                 parsed = f"parse error: {e}"
-            out.append({"lamp": r["name"], "result": parsed})
+            out.append({"lamp": r["name"], "mac": r.get("mac"), "result": parsed})
         return out
     # Daemon socket present but query failed (lamps asleep/offline).
     if dq.get("daemon") is True:
@@ -178,6 +178,7 @@ def _query_route(opcode, params, response_opcode, parse_fn, targets, data):
         for t in targets:
             out.append({
                 "lamp": t["name"],
+                "mac": t["mac"],
                 "result": {"error": f"{t['mac']} offline (daemon)"},
             })
         return out

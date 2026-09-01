@@ -1,6 +1,8 @@
 # Changelog
 
-## 1.0.46 - 2026-09-01
+## 1.0.47 - 2026-09-01
+- Include the lamp MAC in status/query results so the HA integration can map
+  state back to per-lamp entities (all lamps share the "Smart_mesh" name).
 - Daemon starts its TCP/socket server immediately and connects lamps in the
   background — a slow/wedged connect no longer blocks startup (which made the
   add-on fall back to hanging direct-connects and saturated the web queue).
