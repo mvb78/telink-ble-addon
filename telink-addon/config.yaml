@@ -31,8 +31,6 @@ ports:
   8099/tcp: 8099
 ports_description:
   8099/tcp: Telink web UI (fallback when Ingress is unavailable)
-map:
-  - config:rw
 options:
   known_passwords: "0000,1234,123"
   scan_timeout: 45
