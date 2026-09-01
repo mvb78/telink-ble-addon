@@ -38,6 +38,48 @@ DAEMON_SOCK = "/tmp/telink-ble.sock"
 BROADCAST = 0xFFFF
 
 
+def _daemon_available() -> bool:
+    return bool(os.environ.get("TELINK_DAEMON_HOST")) or os.path.exists(DAEMON_SOCK)
+
+
+def _daemon_connect():
+    """
+    Connect to the daemon. Uses the local Unix socket, or TCP when a remote
+    daemon host is configured via TELINK_DAEMON_HOST (Variant B sidecar).
+    Raises ConnectionError/FileNotFoundError when unavailable.
+    """
+    host = os.environ.get("TELINK_DAEMON_HOST")
+    if host:
+        port = int(os.environ.get("TELINK_DAEMON_PORT", "8097"))
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+        sock.settimeout(5.0)
+        sock.connect((host, port))
+        return sock
+    if not _daemon_available():
+        raise FileNotFoundError(DAEMON_SOCK)
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.settimeout(5.0)
+    sock.connect(DAEMON_SOCK)
+    return sock
+
+
+def _daemon_request(req: dict, timeout: float = 5.0) -> dict:
+    """Send one JSON request to the daemon and return its response."""
+    sock = _daemon_connect()
+    sock.settimeout(timeout)
+    try:
+        sock.sendall((json.dumps(req) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = sock.recv(256)
+            if not chunk:
+                break
+            data += chunk
+    finally:
+        sock.close()
+    return json.loads(data)
+
+
 def _try_daemon(opcode: int, params: bytes, selector: str,
                 mac: str | None, addr: int | None,
                 expected_count: int | None = None) -> bool:
@@ -47,25 +89,14 @@ def _try_daemon(opcode: int, params: bytes, selector: str,
     Returns True only when the daemon confirms success for all expected targets.
     Returns False to fall through to direct-connect mode.
     """
-    if not os.path.exists(DAEMON_SOCK):
+    if not _daemon_available():
         return False
     req: dict = {"opcode": opcode, "params": list(params), "selector": selector,
                  "address": addr if addr is not None else BROADCAST}
     if mac:
         req["mac"] = mac
     try:
-        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        sock.settimeout(5.0)
-        sock.connect(DAEMON_SOCK)
-        sock.sendall((json.dumps(req) + "\n").encode())
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = sock.recv(256)
-            if not chunk:
-                break
-            data += chunk
-        sock.close()
-        resp = json.loads(data)
+        resp = _daemon_request(req)
         if resp.get("status") == "ok":
             count = resp.get("count")
             print(f"  [daemon] OK ({count if count is not None else '?'} lamp(s))")
@@ -99,25 +130,14 @@ def _try_daemon_query(opcode: int, params: bytes, response_opcode: int,
     when the daemon socket was present, so callers can tell an "all lamps
     offline" report from "no daemon running".
     """
-    if not os.path.exists(DAEMON_SOCK):
+    if not _daemon_available():
         return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
     req: dict = {"kind": "query", "opcode": opcode, "params": list(params),
                  "response_opcode": response_opcode, "selector": selector}
     if mac:
         req["mac"] = mac
     try:
-        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        sock.settimeout(10.0)
-        sock.connect(DAEMON_SOCK)
-        sock.sendall((json.dumps(req) + "\n").encode())
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        sock.close()
-        resp = json.loads(data)
+        resp = _daemon_request(req, timeout=10.0)
         if resp.get("status") == "ok":
             return {"ok": True, "results": resp.get("results", []),
                     "msg": (resp.get("errors") or ["all lamps responded"])[0] if resp.get("errors") else "OK (daemon)",
@@ -137,24 +157,13 @@ def _try_daemon_read(mac: str | None = None, selector: str = "all"):
     "msg": str, "daemon": bool}. Unlike the encrypted mesh query, this is a
     plain GATT read that needs no HCI-monitor notification capture.
     """
-    if not os.path.exists(DAEMON_SOCK):
+    if not _daemon_available():
         return {"ok": False, "results": [], "msg": "daemon not running", "daemon": False}
     req: dict = {"kind": "read", "selector": selector}
     if mac:
         req["mac"] = mac
     try:
-        sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-        sock.settimeout(10.0)
-        sock.connect(DAEMON_SOCK)
-        sock.sendall((json.dumps(req) + "\n").encode())
-        data = b""
-        while not data.endswith(b"\n"):
-            chunk = sock.recv(4096)
-            if not chunk:
-                break
-            data += chunk
-        sock.close()
-        resp = json.loads(data)
+        resp = _daemon_request(req, timeout=10.0)
         if resp.get("status") == "ok":
             return {"ok": True, "results": resp.get("results", []),
                     "msg": "OK (daemon read)", "daemon": True}

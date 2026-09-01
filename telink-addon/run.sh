@@ -21,6 +21,10 @@ export TELINK_WEB_DEBUG=0
 # CONFIG_<OPTION> env vars; the python package reads TELINK_* instead. Map them.
 [ -n "${CONFIG_KNOWN_PASSWORDS:-}" ] && export TELINK_KNOWN_PASSWORDS="${CONFIG_KNOWN_PASSWORDS}"
 [ -n "${CONFIG_SCAN_TIMEOUT:-}" ] && export TELINK_SCAN_TIMEOUT="${CONFIG_SCAN_TIMEOUT}"
+# Variant B: when daemon_host is configured the BLE daemon runs in a privileged
+# sidecar container; this add-on only serves the web UI and bridges to it.
+[ -n "${CONFIG_DAEMON_HOST:-}" ] && export TELINK_DAEMON_HOST="${CONFIG_DAEMON_HOST}"
+[ -n "${CONFIG_DAEMON_PORT:-}" ] && export TELINK_DAEMON_PORT="${CONFIG_DAEMON_PORT}"
 
 mkdir -p "$TELINK_DATA_DIR"
 
@@ -36,7 +40,14 @@ DAEMON_PID=""
 
 PAUSED="$TELINK_DATA_DIR/daemon_paused"
 
+# In Variant B the BLE daemon lives in a privileged sidecar container, so this
+# add-on never starts a local daemon.
+REMOTE_DAEMON="${TELINK_DAEMON_HOST:-}"
+
 start_daemon() {
+  if [ -n "$REMOTE_DAEMON" ]; then
+    return 0
+  fi
   if [ -f "$PAUSED" ]; then
     echo "[run] daemon paused (flag present) — not starting"
     return 0
@@ -77,6 +88,11 @@ while true; do
   if ! kill -0 "$WEB_PID" 2>/dev/null; then
     echo "[run] web process exited unexpectedly"
     stop_all TERM
+  fi
+  if [ -n "$REMOTE_DAEMON" ]; then
+    # Variant B: daemon runs in the sidecar; nothing to supervise here.
+    sleep 5
+    continue
   fi
   if { [ -z "$DAEMON_PID" ] || ! kill -0 "$DAEMON_PID" 2>/dev/null; }; then
     if [ -f "$PAUSED" ]; then

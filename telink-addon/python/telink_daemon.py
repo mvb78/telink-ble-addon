@@ -26,10 +26,21 @@ import sys
 
 import lamp_registry as registry
 from telink_ble import TelinkController
-from config import CHAR_STATUS_UUID
+from config import CHAR_STATUS_UUID, LAMPS_FILE
 
 SOCK_PATH = "/tmp/telink-ble.sock"
 PID_PATH = "/tmp/telink-ble.pid"
+
+# Pause flag shared with the web app (also honored by a remote sidecar daemon
+# when both mount the same data dir).
+PAUSE_FILE = os.path.join(os.environ.get("TELINK_DATA_DIR", "/data"), "daemon_paused")
+
+# Remote-daemon mode (Variant B): when TELINK_DAEMON_HOST is set the daemon
+# listens on TCP instead of the local Unix socket. This lets the BLE layer run
+# in a privileged sidecar container while the Supervisor add-on only serves the
+# web UI and bridges commands.
+TCP_HOST = os.environ.get("TELINK_DAEMON_HOST")
+TCP_PORT = int(os.environ.get("TELINK_DAEMON_PORT", "8097"))
 _KEEPALIVE_INTERVAL = 28.0  # seconds idle before sending keepalive
 _STATUS_PARAMS = bytes([0x10] + [0] * 9)
 _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
@@ -281,20 +292,12 @@ async def _handle_client(
             pass
 
 
-async def start_daemon():
+async def _build_sessions() -> dict[str, DaemonSession]:
+    """Connect to every lamp in the registry, returning live sessions."""
     lamps = registry.load()
-    if not lamps:
-        print("No lamps saved. Run 'discover' first.")
-        return
-
-    with open(PID_PATH, "w") as f:
-        f.write(str(os.getpid()))
-
-    print(f"Connecting to {len(lamps)} lamp(s) ...", flush=True)
     sessions: dict[str, DaemonSession] = {
         lamp["mac"].upper(): DaemonSession(lamp) for lamp in lamps
     }
-
     # Connect serially (not concurrently): BlueZ/dbus errors with
     # "Operation already in progress" when several GATT connects hit the
     # adapter at once. Serial connects + a small settle delay are reliable.
@@ -317,20 +320,88 @@ async def start_daemon():
             except Exception:
                 pass
             print(f"  [{sess.lamp['name']}] giving up after {_MAX_START_ATTEMPTS} attempts", flush=True)
+    return {mac: s for mac, s in sessions.items() if s.ctrl.session_key is not None}
 
-    sessions = {mac: s for mac, s in sessions.items() if s.ctrl.session_key is not None}
-    if not sessions:
-        print("No lamps connected. Exiting.")
-        return
+
+async def _reload_sessions(sessions: dict[str, DaemonSession]) -> None:
+    """Stop all sessions and reconnect from the current registry."""
+    for s in list(sessions.values()):
+        try:
+            await s.stop()
+        except Exception:
+            pass
+    sessions.clear()
+    new = await _build_sessions()
+    sessions.update(new)
+    print(f"Daemon reloaded ({len(sessions)} lamp(s)).", flush=True)
+
+
+async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
+    """
+    Watch the pause flag and lamps.json so the daemon can be paused/resumed and
+    pick up discovery results without a restart (works for both the local
+    daemon and a remote sidecar sharing the data dir).
+    """
+    last_mtime = 0.0
+    paused = os.path.exists(PAUSE_FILE)
+    while not stop_event.is_set():
+        await asyncio.sleep(2.0)
+        is_paused = os.path.exists(PAUSE_FILE)
+        try:
+            mtime = os.stat(LAMPS_FILE).st_mtime
+        except OSError:
+            mtime = last_mtime
+        if is_paused and not paused:
+            for s in list(sessions.values()):
+                try:
+                    await s.stop()
+                except Exception:
+                    pass
+            sessions.clear()
+            print("Daemon paused.", flush=True)
+        elif not is_paused and paused:
+            await _reload_sessions(sessions)
+        elif not is_paused and mtime != last_mtime and sessions:
+            print("lamps.json changed; reloading ...", flush=True)
+            await _reload_sessions(sessions)
+        paused = is_paused
+        last_mtime = mtime
+
+
+async def start_daemon():
+    if os.path.exists(PAUSE_FILE):
+        print("Daemon paused (flag present) — holding.", flush=True)
+
+    with open(PID_PATH, "w") as f:
+        f.write(str(os.getpid()))
 
     if os.path.exists(SOCK_PATH):
         os.unlink(SOCK_PATH)
 
-    server = await asyncio.start_unix_server(
-        lambda r, w: _handle_client(r, w, sessions), path=SOCK_PATH
-    )
-    os.chmod(SOCK_PATH, 0o600)
-    print(f"Daemon ready ({len(sessions)} lamp(s)). Socket: {SOCK_PATH}", flush=True)
+    if os.path.exists(PAUSE_FILE):
+        # Stay up but idle (no sessions) so pause/resume still works over the socket.
+        sessions: dict[str, DaemonSession] = {}
+    else:
+        lamps = registry.load()
+        if not lamps:
+            print("No lamps saved. Run 'discover' first.", flush=True)
+            return
+        print(f"Connecting to {len(lamps)} lamp(s) ...", flush=True)
+        sessions = await _build_sessions()
+        if not sessions:
+            print("No lamps connected. Exiting.", flush=True)
+            return
+
+    async def _client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        await _handle_client(reader, writer, sessions)
+
+    if TCP_HOST:
+        server = await asyncio.start_server(_client, TCP_HOST, TCP_PORT)
+        print(f"Daemon ready ({len(sessions)} lamp(s)). TCP: {TCP_HOST}:{TCP_PORT}", flush=True)
+    else:
+        server = await asyncio.start_unix_server(_client, path=SOCK_PATH)
+        os.chmod(SOCK_PATH, 0o600)
+        print(f"Daemon ready ({len(sessions)} lamp(s)). Socket: {SOCK_PATH}", flush=True)
 
     loop = asyncio.get_event_loop()
     stop_event = asyncio.Event()
@@ -341,9 +412,19 @@ async def start_daemon():
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, _on_signal)
 
+    watcher = asyncio.get_event_loop().create_task(
+        _watch_config(sessions, stop_event)
+    )
+
     async with server:
         await stop_event.wait()
         server.close()
+
+    watcher.cancel()
+    try:
+        await watcher
+    except asyncio.CancelledError:
+        pass
 
     print("Shutting down ...", flush=True)
     await asyncio.gather(*[s.stop() for s in sessions.values()], return_exceptions=True)

@@ -12,7 +12,7 @@ FROM python:3.12-slim
 # Supervisor 2026.04+ no longer injects these via the legacy builder; keep them
 # here so locally built images carry the io.hass labels the Supervisor expects.
 LABEL \
-  io.hass.version="1.0.32" \
+  io.hass.version="1.0.33" \
   io.hass.type="addon" \
   io.hass.arch="amd64" \
   org.opencontainers.image.title="Telink BLE CLI" \
@@ -37,7 +37,8 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY run.sh /run.sh
-RUN chmod +x /run.sh
+COPY run_daemon.sh /run_daemon.sh
+RUN chmod +x /run.sh /run_daemon.sh
 
 # -- S6-style signal handling -------------------------------------------------
 # HA Supervisor expects the add-on to stay in the foreground and handle

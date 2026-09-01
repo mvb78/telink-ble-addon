@@ -19,7 +19,7 @@ import group_registry as group_registry
 import lamp_registry as registry
 from config import CHAR_COMMAND_UUID, CHAR_NOTIFY_UUID, CHAR_PAIR_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
-from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, _stop_daemon, cmd_assign_addr, run_on_lamp
+from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, _stop_daemon, cmd_assign_addr, run_on_lamp, _daemon_available
 
 app = Flask(__name__)
 
@@ -185,7 +185,7 @@ def index():
 @app.route("/api/daemon")
 def api_daemon():
     paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
-    return jsonify({"running": os.path.exists("/tmp/telink-ble.sock"),
+    return jsonify({"running": _daemon_available(),
                     "paused": paused})
 
 
@@ -198,7 +198,10 @@ def _data_dir():
 def api_daemon_pause():
     d = _data_dir()
     open(os.path.join(d, "daemon_paused"), "w").close()
-    return _run_sync(lambda: _stop_daemon()) or {"ok": True}
+    # Remote (Variant B) daemon watches the shared flag file itself.
+    if not os.environ.get("TELINK_DAEMON_HOST"):
+        return _run_sync(lambda: _stop_daemon()) or {"ok": True}
+    return {"ok": True, "msg": "daemon_paused flag set (remote daemon)"}
 
 
 def _run_sync(fn):

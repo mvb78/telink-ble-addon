@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.33 - 2026-09-01
+- **Variant B**: split BLE daemon from web UI. The daemon can run as a
+  privileged sidecar container listening on TCP (`TELINK_DAEMON_HOST`/`PORT`),
+  while the Supervisor add-on runs web-only and bridges to it. Fixes state
+  readback where the add-on container's seccomp blocks the raw HCI monitor
+  (`socket(AF_BLUETOOTH)` → Errno 97). Adds `daemon_host`/`daemon_port`
+  options, `run_daemon.sh` entrypoint, and a pause/reload watcher in the
+  daemon (honors the shared `daemon_paused` flag + re-reads lamps.json).
+
 ## 1.0.32 - 2026-09-01
 - `full_access: true` (replaces privileged NET_ADMIN/NET_RAW + usb/devices):
   the container's seccomp blocks `socket(AF_BLUETOOTH)`, so the raw HCI
