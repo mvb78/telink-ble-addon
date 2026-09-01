@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.28 - 2026-09-01
+- Log per-password probe errors during discovery instead of silently returning
+  None, so container BLE failures are visible in the add-on log.
+
 ## 1.0.27 - 2026-09-01
 - Add `8888` to the default `known_passwords` list (config default + code
   fallback). The Smart_qXsx lamps use the mesh password `8888`, so discovery

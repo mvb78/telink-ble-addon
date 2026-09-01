@@ -359,7 +359,8 @@ async def probe_lamp(mac: str, name: str) -> str | None:
             await ctrl.login()
             await ctrl.disconnect()
             return password
-        except Exception:
+        except Exception as err:
+            print(f"[probe] {mac} pw={password}: {type(err).__name__}: {err}", file=sys.stderr, flush=True)
             try:
                 await ctrl.disconnect()
             except Exception:
