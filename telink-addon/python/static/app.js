@@ -385,6 +385,30 @@ $("ct-slider").addEventListener("change", (e) => {
   sendCmd("colortemp", { value: +e.target.value });
 });
 
+// ── power toggle (HA-style switch) ────────────────────────────────────────
+
+const powerSwitch = $("power-switch");
+const powerState = $("power-state");
+powerSwitch.addEventListener("change", () => {
+  sendCmd(powerSwitch.checked ? "on" : "off");
+});
+
+async function pollPowerState() {
+  // Best-effort: read the bulk status and flip the switch to match reality.
+  const res = await api("api/command/status", {});
+  if (!res.ok || !res.results || !res.results.length) return;
+  const states = res.results.map((r) => r.result && r.result.state);
+  if (states.every((s) => s === "ON")) {
+    powerSwitch.checked = true;
+    powerState.textContent = "on";
+  } else if (states.every((s) => s === "OFF")) {
+    powerSwitch.checked = false;
+    powerState.textContent = "off";
+  } else if (states.includes("ON")) {
+    powerState.textContent = "mixed";
+  }
+}
+
 // scene dropdown 1..16
 const sceneSel = $("scene-id");
 for (let i = 1; i <= 16; i++) {
@@ -449,5 +473,7 @@ discoverBtn.addEventListener("click", async () => {
   await Promise.all([loadLamps(), loadGroups()]);
   setTarget(null, "All lamps", "every saved lamp");
   pollDaemon();
+  pollPowerState();
+  setInterval(pollPowerState, 15000);
   log("Ready. Tip: start the BLE daemon for near-instant commands.");
 })();

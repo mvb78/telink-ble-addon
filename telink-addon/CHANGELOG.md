@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.39 - 2026-09-01
+## 1.0.40 - 2026-09-01
+- Web UI: authentic HA look — top app bar, HA-style toggle switch for power
+  (with state reflection via status poll), HA sliders and filled/tonal buttons.
+  Light/dark follows the browser/HA preference automatically.
 - Serve HTML/JS/CSS with no-cache headers so stale browser caches can never
   break the UI after an add-on update (a cached old app.js referencing the
   removed swatches element was crashing on load, hiding the lamp list).
