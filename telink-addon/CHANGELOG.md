@@ -1,6 +1,11 @@
 # Changelog
 
-## 1.0.43 - 2026-09-01
+## 1.0.44 - 2026-09-01
+- Stop stranding lamps: sessions now release after TELINK_IDLE_TIMEOUT
+  (default 120s) of inactivity, mirroring the bench's brief-connection
+  model. Telink lamps stop advertising while connected, so holding sessions
+  forever put them in a silent state that required a power-cycle. Reconnect
+  on demand; _reconnect restarts the keepalive.
 - Fix single-lamp control: daemon sessions now connect by exact MAC only (the
   name-based RPA fallback attached sessions to whatever lamp was advertising,
   so unicast dst=<address> hit the wrong lamp and per-lamp control failed).

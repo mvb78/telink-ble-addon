@@ -44,6 +44,11 @@ TCP_PORT = int(os.environ.get("TELINK_DAEMON_PORT", "8097"))
 _KEEPALIVE_INTERVAL = 28.0  # seconds idle before sending keepalive
 _STATUS_PARAMS = bytes([0x10] + [0] * 9)
 _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
+# Release a lamp's connection after this many seconds without a command. Telink
+# mesh lamps stop advertising while connected, so holding sessions forever can
+# strand them in a silent state (the bench's brief-connection model never had
+# this problem). Sessions reconnect on demand.
+IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 
 
 class DaemonSession:
@@ -153,6 +158,10 @@ class DaemonSession:
             self.ctrl.seq_manager = saved_seq
         await self.ctrl.connect()
         await self.ctrl.login()
+        self._last_cmd_time = asyncio.get_event_loop().time()
+        self._keepalive_task = asyncio.get_event_loop().create_task(
+            self._keepalive_loop()
+        )
         print(f"  [{self.lamp['name']}] reconnected", flush=True)
 
     async def _keepalive_loop(self):
@@ -425,6 +434,20 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                         last_sig = _lamps_signature()
 
 
+async def _idle_sweeper(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
+    """Release connections that have been idle too long so the lamps go back
+    to advertising and stay reachable (mirrors the bench's brief-connection
+    model). Sessions are kept in the dict and reconnect on the next command."""
+    while not stop_event.is_set():
+        await asyncio.sleep(10.0)
+        now = asyncio.get_event_loop().time()
+        for mac, sess in list(sessions.items()):
+            connected = sess.ctrl.client and sess.ctrl.client.is_connected
+            if connected and (now - sess._last_cmd_time) >= IDLE_TIMEOUT:
+                print(f"  [{sess.lamp['name']}] idle {IDLE_TIMEOUT:.0f}s - releasing connection", flush=True)
+                await sess.stop()
+
+
 async def start_daemon():
     if os.path.exists(PAUSE_FILE):
         print("Daemon paused (flag present) — holding.", flush=True)
@@ -475,16 +498,21 @@ async def start_daemon():
     watcher = asyncio.get_event_loop().create_task(
         _watch_config(sessions, stop_event)
     )
+    idle_sweeper = asyncio.get_event_loop().create_task(
+        _idle_sweeper(sessions, stop_event)
+    )
 
     async with server:
         await stop_event.wait()
         server.close()
 
     watcher.cancel()
-    try:
-        await watcher
-    except asyncio.CancelledError:
-        pass
+    idle_sweeper.cancel()
+    for task in (watcher, idle_sweeper):
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
     print("Shutting down ...", flush=True)
     await asyncio.gather(*[s.stop() for s in sessions.values()], return_exceptions=True)
