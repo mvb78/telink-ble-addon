@@ -12,7 +12,7 @@ FROM python:3.12-slim
 # Supervisor 2026.04+ no longer injects these via the legacy builder; keep them
 # here so locally built images carry the io.hass labels the Supervisor expects.
 LABEL \
-  io.hass.version="1.0.44" \
+  io.hass.version="1.0.45" \
   io.hass.type="addon" \
   io.hass.arch="amd64" \
   org.opencontainers.image.title="Telink BLE CLI" \

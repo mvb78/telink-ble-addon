@@ -129,7 +129,10 @@ class TelinkController:
         else:
             print("  [warn] HCI monitor unavailable; notify readback disabled", flush=True)
 
-        self.client = BleakClient(target.address)
+        # Connect via the discovered device object, not the address string:
+        # these lamps rotate RPA, so a string reconnect can miss/hang. Bleak
+        # resolves the device's current address from the BLEDevice object.
+        self.client = BleakClient(target)
         await self.client.connect()
         await asyncio.sleep(0.5)
 

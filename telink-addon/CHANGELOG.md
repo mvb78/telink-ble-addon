@@ -1,6 +1,9 @@
 # Changelog
 
-## 1.0.44 - 2026-09-01
+## 1.0.45 - 2026-09-01
+- Connect via the discovered BLEDevice object instead of the address string
+  (RPA-safe, per research notes) — fixes direct connects that could hang or
+  miss a lamp after its address rotated.
 - Stop stranding lamps: sessions now release after TELINK_IDLE_TIMEOUT
   (default 120s) of inactivity, mirroring the bench's brief-connection
   model. Telink lamps stop advertising while connected, so holding sessions
