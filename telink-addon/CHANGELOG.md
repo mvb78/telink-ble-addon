@@ -1,5 +1,41 @@
 # Changelog
 
+## 1.2.0 - 2026-09-03 (UNVALIDATED — bench/HA test pending)
+Protocol updates ported from the cross-validated telink-ble-esp32 research
+(docs/TELINK_MESH_PROTOCOL.md):
+
+- **Delete-pairing via 0x0A + proof frame** — `[0x0A]‖rand(8)‖proof(8)`,
+  proof = java_aes(base_key, rand‖00…)[8:16]; lamp confirms with pair state
+  0x0B. Falls back to the legacy bare 0x0E write when unconfirmed
+  (`provision_lamp.delete_pairing_proof`). Needs hardware validation (T6).
+- **0xE1 unencrypted address confirm during provisioning** — new
+  `telink_ble.AddrConfirmWatcher` watches the HCI monitor for the raw 0xE1
+  push after the 0xE0 write and ADOPTS the lamp-reported address (mismatch
+  logged). Falls back to the old blind 4 s settle where the monitor is
+  unavailable (in-container). Provisioning now also value-write subscribes
+  the notify char so the push is sent at all.
+- **Bootstrap login credential auto-fallback** (ESP32 recipe §6.2) — with
+  `bootstrap:true` and no explicit current creds the flow now tries factory
+  `out_of_mesh`/`123` first, then the target mesh creds, so a fresh or kicked
+  lamp provisions without passing current_name/current_password.
+- **Short group query 0xDD → 0xD4** (app-layer, BT-Light APK flow) as
+  `/api/command/app-get-groups`, plus **`POST /api/groups/sync`** which reads
+  a lamp's group memberships and reconciles groups.json (creates unknown
+  groups, drops stale memberships of the queried lamp — only for addresses
+  the short format can report, 0x8001..0x80FF). UI: "Read groups from lamp"
+  button in the membership panel.
+- **Unicast addresses 1..250 + auto-allocation** — provision/assign-addr
+  accept `addr:"auto"` (lowest free of 1..250 vs lamps.json, BT-Light app
+  behavior); old hard 1..63 limit dropped; UI empty input = auto.
+- **Discovery probe list** now `8888, 1234, 0000, 123` (factory creds for
+  out_of_mesh/Smart_nSpq/Smart_qXsx meshes per the ESP32 research). Existing
+  installs must update the `known_passwords` add-on option to benefit.
+- New host-runnable unit tests: `telink-addon/python/tests/` (proof frame,
+  0xD4 parse, 0xE1 watcher matching, address allocation) —
+  `python3 -m pytest tests/`.
+- Docs: ported `docs/TELINK_MESH_PROTOCOL.md` (tracked) from the ESP32
+  deliverable; refreshed the stale gap list in the local telink-ble.md.
+
 ## 1.1.0 - 2026-09-01
 - 1.1.x series: production state (Variant B sidecar, groups, HA integration).
   Changes in 1.0.25-1.0.48 are rolled into this release line.

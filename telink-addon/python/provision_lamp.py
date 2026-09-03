@@ -20,7 +20,12 @@ from bleak import BleakClient, BleakScanner
 from Crypto.Cipher import AES
 
 from config import CHAR_PAIR_UUID, CHAR_COMMAND_UUID
-from telink_crypto import derive_base_key, build_challenge, verify_sample_s, get_session_key, java_aes
+from telink_crypto import (derive_base_key, build_challenge, verify_sample_s,
+                           get_session_key, java_aes, build_delete_pairing_frame)
+
+# Factory defaults a kicked/fresh lamp returns to (protocol doc §5.3)
+PROVISION_FACTORY_NAME = "out_of_mesh"
+PROVISION_FACTORY_PWD = "123"
 
 
 def normalize_16(s: str) -> bytearray:
@@ -89,6 +94,26 @@ async def delete_pairing(client: BleakClient):
     """Send 0x0E DELETE_PAIRING to clear provisioning (pairing.md:115, factory reset)."""
     await client.write_gatt_char(CHAR_PAIR_UUID, bytes([0x0E]), response=True)
     await asyncio.sleep(0.5)
+
+
+async def delete_pairing_proof(client: BleakClient, mesh_name: str, mesh_password: str) -> bool:
+    """Delete pairing via the 0x0A RESET_MESH proof frame (protocol doc §4.4;
+    mirrors telink-ble-esp32 provision.cpp unpair_lamp).
+
+    Frame built by telink_crypto.build_delete_pairing_frame:
+    [0x0A] ‖ rand(8) ‖ proof(8), plaintext. The lamp answers by setting the
+    pair state to 0x0B (DeletePairing rsp). Returns True on confirmation.
+
+    NOTE: the 0x0A-vs-0x0E opcode split is inferred from the Rust TLSR8266
+    firmware re-implementation; the bare 0x0E write below is kept as fallback
+    until bench-validated.
+    """
+    rand = os.urandom(8)
+    frame = build_delete_pairing_frame(mesh_name, mesh_password, rand)
+    await client.write_gatt_char(CHAR_PAIR_UUID, frame, response=True)
+    await asyncio.sleep(0.5)
+    rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+    return bool(rsp) and rsp[0] == 0x0B
 
 
 async def get_mesh_ltk(client: BleakClient, mesh_name: str, mesh_password: str) -> bytes:

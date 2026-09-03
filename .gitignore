@@ -25,3 +25,4 @@ docs/progress.md
 docs/telink-ble.md
 telink-addon/python/groups.json
 telink-addon/python/lamps.json
+.pytest_cache/

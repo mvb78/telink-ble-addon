@@ -83,6 +83,104 @@ def _open_hci_monitor() -> socket.socket | None:
     return sock
 
 
+class AddrConfirmWatcher:
+    """Watch the HCI monitor for the UNENCRYPTED 0xE1 address-confirm push.
+
+    After a 0xE0 address-assign (dst 0x0000) the lamp pushes a raw 20-byte
+    frame on the notify characteristic (handle 0x0012): [7]=0xE1,
+    [8..10]=vendor 0x0211, [10..12]=assigned address LE (protocol doc §6.2,
+    bench-validated in telink-ble-esp32). The frame is plaintext, so it fails
+    every decryption attempt in the normal notify path and must be matched on
+    the raw bytes here.
+
+    Create the watcher BEFORE sending 0xE0 so the push isn't missed. All
+    methods degrade to no-ops when the monitor is unavailable (HAOS add-on
+    container — caller falls back to the old blind-settle behavior).
+    """
+
+    _NOTIFY_ATT_HANDLE = 0x0012
+    _HCI_MON_ACL_RX_PKT = 0x0005
+
+    def __init__(self):
+        self._sock = _open_hci_monitor()
+        self._buf = b""
+
+    @property
+    def available(self) -> bool:
+        return self._sock is not None
+
+    async def wait(self, timeout: float = 4.0) -> int | None:
+        """Wait for the confirm push; returns the reported address or None."""
+        if self._sock is None:
+            return None
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            try:
+                chunk = await asyncio.to_thread(self._sock.recv, 4096)
+            except asyncio.CancelledError:
+                return None
+            except (socket.timeout, OSError):
+                continue
+            self._buf += chunk
+            packets, self._buf = self._parse_packets(self._buf)
+            for pkt_opcode, payload in packets:
+                reported = self._match_packet(pkt_opcode, payload)
+                if reported is not None:
+                    self._buf = b""
+                    return reported
+        return None
+
+    @staticmethod
+    def _parse_packets(buf: bytes) -> tuple[list, bytes]:
+        """Split a btmon byte stream into (opcode, payload) tuples.
+
+        Monitor packet layout: [0..1] opcode LE u16, [2..3] adapter index,
+        [4..5] payload length LE u16, [6..] payload. Returns the complete
+        packets plus the trailing incomplete bytes.
+        """
+        packets = []
+        pos = 0
+        while pos + 6 <= len(buf):
+            pkt_opcode = buf[pos] | (buf[pos + 1] << 8)
+            pkt_len = buf[pos + 4] | (buf[pos + 5] << 8)
+            if pos + 6 + pkt_len > len(buf):
+                break
+            packets.append((pkt_opcode, buf[pos + 6: pos + 6 + pkt_len]))
+            pos += 6 + pkt_len
+        return packets, buf[pos:]
+
+    @staticmethod
+    def _match_packet(pkt_opcode: int, payload: bytes) -> int | None:
+        """Return the assigned address if this monitor packet is the 0xE1 push."""
+        if pkt_opcode != AddrConfirmWatcher._HCI_MON_ACL_RX_PKT or len(payload) < 11:
+            return None
+        if payload[6] != 0x04 or payload[7] != 0x00:  # L2CAP CID = ATT
+            return None
+        if payload[8] != 0x1B:  # ATT_NOTIFY
+            return None
+        handle = payload[9] | (payload[10] << 8)
+        if handle != AddrConfirmWatcher._NOTIFY_ATT_HANDLE:
+            return None
+        raw = payload[11:]
+        if len(raw) < 12 or raw[7] != 0xE1:
+            return None
+        if raw[8] != (VENDOR_ID & 0xFF) or raw[9] != ((VENDOR_ID >> 8) & 0xFF):
+            return None
+        reported = raw[10] | (raw[11] << 8)
+        if not 1 <= reported <= 250:  # unicast range sanity guard
+            return None
+        return reported
+
+    def close(self):
+        if self._sock:
+            try:
+                self._sock.close()
+            except Exception:
+                pass
+            self._sock = None
+
+
 class TelinkController:
     def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None):
         self.mac = mac.upper()

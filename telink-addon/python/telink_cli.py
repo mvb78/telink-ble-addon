@@ -600,7 +600,7 @@ async def main():
 
     if command == "assign-addr":
         if mac is None or not values:
-            print("Usage: assign-addr --mac <AA:BB:CC:DD:EE:FF> <1-63>")
+            print("Usage: assign-addr --mac <AA:BB:CC:DD:EE:FF> <1-250>")
             return
         ok, msg = await cmd_assign_addr(mac, values[0])
         print(msg)

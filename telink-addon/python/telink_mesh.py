@@ -65,3 +65,18 @@ def build_redundant_packet(seq: int, address: int, opcode: int, params: bytes) -
     # The second packet is identical to the first one
     packet2 = bytes(packet1)
     return packet1, packet2
+
+
+def parse_short_group_response(pkt: bytes) -> list[int]:
+    """
+    Parse the app-layer short group response (0xD4, BT-Light APK flow):
+    the 20-byte vendor frame carries group ids as single bytes at [10..20),
+    each id b meaning group address 0x8000|b, 0xFF-terminated. This format can
+    only represent group addresses 0x8001..0x80FF.
+    """
+    groups: list[int] = []
+    for b in pkt[10:20]:
+        if b == 0xFF:
+            break
+        groups.append(0x8000 | b)
+    return groups

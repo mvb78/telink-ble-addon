@@ -43,8 +43,10 @@ telink-ble-addon/
 3. The **Telink BLE CLI** add-on appears. Click it → **Install**.
 4. Optional, before starting:
    - **known_passwords** — comma-separated list of mesh passwords to try during
-     discovery (default `8888`). Add yours if your lamps use a different
-     password.
+     discovery (default `8888,1234,0000,123` — includes the factory creds so
+     unprovisioned `out_of_mesh` lamps are found; on installs saved before
+     1.2.0 the option stays at its old value until you update it). Add yours
+     if your lamps use a different password.
    - **scan_timeout** — seconds to scan during discovery (default `45`).
    - **daemon_host / daemon_port** — leave empty for the normal single-container
      mode. Set `daemon_host` only if you run the BLE daemon as a privileged

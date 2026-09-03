@@ -44,7 +44,10 @@ _MIT licensed — see [LICENSE](LICENSE)._
 1. Home Assistant → **Settings → System → Add-ons → Add-on store → ⋮ → Repositories**
 2. Add: `https://github.com/mvb78/telink-ble-addon`
 3. Install **Telink BLE CLI**, set options if needed:
-   - `known_passwords` — comma-separated mesh passwords (default `8888`)
+   - `known_passwords` — comma-separated mesh passwords (default
+     `8888,1234,0000,123`; the factory creds let discovery find unprovisioned
+     `out_of_mesh` lamps too. **Existing installs** keep their saved option —
+     update it to get the new defaults)
    - `scan_timeout` — discovery scan seconds (default `45`)
    - `daemon_host` / `daemon_port` — set `daemon_host` to `172.30.32.1` (and
      `daemon_port` to `8097`) only when running the BLE daemon as a privileged

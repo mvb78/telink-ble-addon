@@ -62,6 +62,19 @@ def generate_random_8() -> bytes:
     return os.urandom(8)
 
 
+def build_delete_pairing_frame(mesh_name: str, password: str, rand: bytes) -> bytes:
+    """
+    0x0A RESET_MESH / delete-pairing frame for the pair characteristic:
+      [0x0A] ‖ rand(8) ‖ proof(8)   (plaintext)
+    proof = java_aes(base_key, rand ‖ 00…00)[8:16]  (base_key = AES key).
+    Mirrors telink-ble-esp32 provision.cpp unpair_lamp; lamp confirms by
+    setting the pair state to 0x0B.
+    """
+    base_key = derive_base_key(mesh_name, password)
+    proof = java_aes(base_key, rand + b"\x00" * 8)
+    return bytes([0x0A]) + rand + proof[8:16]
+
+
 def build_ivm(mac_bytes: bytes, seq: int) -> bytes:
     """
     IVM = getSecIVM(getMacBytes(), seq)

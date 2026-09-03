@@ -20,6 +20,7 @@ import lamp_registry as registry
 from config import CHAR_COMMAND_UUID, CHAR_NOTIFY_UUID, CHAR_PAIR_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
 from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, _stop_daemon, cmd_assign_addr, run_on_lamp, _daemon_available
+from telink_mesh import parse_short_group_response
 
 app = Flask(__name__)
 
@@ -74,6 +75,13 @@ def _get_targets(data):
     if addr is not None:
         return [l for l in lamps if l.get("mesh_address") == int(addr)]
     return registry.get_targets(lamps, selector, None, None)
+
+
+# ── unicast address helpers ──────────────────────────────────────────────
+# Allocation/validation lives in lamp_registry (pure, unit-tested); aliases
+# kept for the routes below.
+
+_resolve_unicast_addr = registry.resolve_unicast_addr
 
 
 async def _execute(opcode, params, targets, dst=None, mac=None):
@@ -340,12 +348,13 @@ def api_lamp_seq(mac):
 @app.route("/api/lamp/<mac>/assign-addr", methods=["POST"])
 def api_lamp_assign_addr(mac):
     data = request.get_json(silent=True) or {}
-    addr = data.get("addr")
-    if addr is None:
-        return jsonify({"ok": False, "msg": "addr required"}), 400
-    ok, msg = _run_async(cmd_assign_addr(mac, int(addr)))
-    _log(f"assign-addr {mac} -> {addr}: {msg}")
-    return jsonify({"ok": ok, "msg": msg})
+    try:
+        addr, auto = _resolve_unicast_addr(data.get("addr"), registry.load())
+    except ValueError as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
+    ok, msg = _run_async(cmd_assign_addr(mac, addr))
+    _log(f"assign-addr {mac} -> {addr}{' (auto)' if auto else ''}: {msg}")
+    return jsonify({"ok": ok, "msg": msg, "addr": addr})
 
 
 @app.route("/api/lamp/<mac>/provision", methods=["POST"])
@@ -355,31 +364,33 @@ def api_lamp_provision(mac):
     then unpause. Only one lamp at a time because a Telink lamp accepts a
     single BLE connection."""
     data = request.get_json(silent=True) or {}
-    addr = data.get("addr")
     name = data.get("name", "Smart_qXsx")
     password = data.get("password", "1234")
     current_name = data.get("current_name")
     current_password = data.get("current_password")
-    if addr is None:
-        return jsonify({"ok": False, "msg": "addr required"}), 400
+    lamps = registry.load()
     try:
-        addr = int(addr)
-    except (TypeError, ValueError):
-        return jsonify({"ok": False, "msg": "addr must be an int"}), 400
+        addr, auto = _resolve_unicast_addr(data.get("addr"), lamps)
+    except ValueError as e:
+        return jsonify({"ok": False, "msg": str(e)}), 400
 
     paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
     if not paused:
         _run_sync(lambda: _stop_daemon())
         open(os.path.join(_data_dir(), "daemon_paused"), "w").close()
 
-    ok, msg = _run_async(_provision_direct(mac, addr, name, password, current_name, current_password, bootstrap=bool(data.get("bootstrap", False))))
+    ok, msg, adopted = _run_async(_provision_direct(mac, addr, name, password, current_name, current_password, bootstrap=bool(data.get("bootstrap", False))))
     if ok:
+        # The lamp may report a different address than requested (0xE1 confirm);
+        # store what the firmware actually has.
+        final_addr = adopted if isinstance(adopted, int) and adopted > 0 else addr
         lamps = registry.load()
-        registry.upsert(lamps, mac.upper(), name, password, mesh_address=addr)
+        registry.upsert(lamps, mac.upper(), name, password, mesh_address=final_addr)
         registry.save(lamps)
-        _log(f"provision {mac} -> {addr}: registry updated")
+        _log(f"provision {mac} -> {final_addr}{' (auto)' if auto else ''}: registry updated")
+        addr = final_addr
     _log(f"provision {mac} -> {addr}: {msg}")
-    return jsonify({"ok": ok, "msg": msg, "daemon_paused": True})
+    return jsonify({"ok": ok, "msg": msg, "addr": addr, "daemon_paused": True})
 
 
 async def _provision_direct(mac, addr, name, password, current_name=None, current_password=None, bootstrap=False):
@@ -388,18 +399,22 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
     `current_name`/`current_password` are the credentials the lamp currently keys
     with (used to log in when its credentials drifted, e.g. back to the MAC-string
     default). If omitted, the new `name`/`password` are used for login too.
+
+    Returns (ok, msg, adopted_addr): `adopted_addr` is the address the lamp
+    itself reported via the unencrypted 0xE1 confirm (None when unconfirmed —
+    e.g. no HCI monitor in-container — the caller then keeps `addr`).
     """
     try:
         import provision_lamp as pl
     except Exception as e:
-        return False, f"provision_lamp import failed: {e}"
+        return False, f"provision_lamp import failed: {e}", None
     try:
         from bleak import BleakScanner
         mac = mac.upper()
         mac_bytes = bytes.fromhex(mac.replace(":", ""))
         device = await BleakScanner.find_device_by_address(mac, timeout=15)
         if not device:
-            return False, f"{mac} not found (daemon held/still down?)"
+            return False, f"{mac} not found (daemon held/still down?)", None
         login_name = current_name if current_name else name
         login_password = current_password if current_password else password
         from bleak import BleakClient
@@ -410,37 +425,88 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
                 # (reverse-engineered from factory provisioning), rather than a
                 # random r1. The lamp only accepts the pre-baked nonce when it is
                 # not yet part of any mesh (e.g. right after a kick/reset).
+                # ESP32 recipe (protocol doc §6.2): try the factory creds first
+                # (fresh/kicked lamp), then the target mesh creds (re-provision).
+                # Explicit current_name/current_password always win.
                 from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
                 from config import CHAR_PAIR_UUID as _PAIR
                 R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
-                base_key = derive_base_key(login_name, login_password)
-                challenge = build_challenge(base_key, R_APP)
-                payload = bytearray(17)
-                payload[0] = 0x0C
-                payload[1:9] = R_APP
-                payload[9:17] = challenge
-                await client.write_gatt_char(_PAIR, bytes(payload), response=True)
-                await asyncio.sleep(0.6)
-                rsp = await client.read_gatt_char(_PAIR)
-                if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
-                    return False, f"bootstrap login rejected: rsp=0x{rsp.hex() if rsp else 'none'}"
-                r2 = bytes(rsp[1:9])
-                sample_s = bytes(rsp[9:17])
-                if not verify_sample_s(login_name, login_password, r2, sample_s):
-                    return False, "bootstrap sample_s mismatch"
-                session_key = get_session_key(login_name, login_password, R_APP, r2)
-                _log(f"bootstrap login OK for {mac}")
+
+                async def _bootstrap_attempt(bk_name, bk_pwd):
+                    """One bootstrap login attempt; returns session_key or None."""
+                    base_key = derive_base_key(bk_name, bk_pwd)
+                    challenge = build_challenge(base_key, R_APP)
+                    payload = bytearray(17)
+                    payload[0] = 0x0C
+                    payload[1:9] = R_APP
+                    payload[9:17] = challenge
+                    await client.write_gatt_char(_PAIR, bytes(payload), response=True)
+                    await asyncio.sleep(0.6)
+                    rsp = await client.read_gatt_char(_PAIR)
+                    if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
+                        _log(f"bootstrap login rejected with '{bk_name}': rsp=0x{rsp.hex() if rsp else 'none'}")
+                        return None
+                    r2 = bytes(rsp[1:9])
+                    sample_s = bytes(rsp[9:17])
+                    if not verify_sample_s(bk_name, bk_pwd, r2, sample_s):
+                        _log(f"bootstrap sample_s mismatch with '{bk_name}'")
+                        return None
+                    return get_session_key(bk_name, bk_pwd, R_APP, r2)
+
+                if current_name and current_password:
+                    attempts = [(login_name, login_password)]
+                else:
+                    attempts = [(pl.PROVISION_FACTORY_NAME, pl.PROVISION_FACTORY_PWD),
+                                (name, password)]
+                session_key = None
+                for attempt_name, attempt_pwd in attempts:
+                    session_key = await _bootstrap_attempt(attempt_name, attempt_pwd)
+                    if session_key is not None:
+                        _log(f"bootstrap login OK for {mac} (creds '{attempt_name}')")
+                        break
+                if session_key is None:
+                    return False, "bootstrap login rejected for all credential attempts", None
             else:
                 session_key = await pl.apk_login(client, login_name, login_password)
+            # Value-write subscribe (never the CCCD — the lamp rejects it with
+            # ATT 0x0e): makes the lamp push the unencrypted 0xE1 confirm.
+            try:
+                await client.write_gatt_char(CHAR_NOTIFY_UUID, b"\x01", response=True)
+            except Exception as e:
+                _log(f"notify subscribe failed during provision (continuing): {e}")
             params = bytes([addr & 0xFF, (addr >> 8) & 0xFF])
             from telink_mesh import SequenceManager, build_mesh_packet
             from telink_crypto import encrypt_packet
+            from telink_ble import AddrConfirmWatcher
             # use persisted last_seq if available for monotonic dedup window
             lamp_entry = next((l for l in registry.load() if l["mac"].upper() == mac.upper()), None)
             seq = SequenceManager(initial=lamp_entry.get("last_seq") if lamp_entry else None).next()
             packet = build_mesh_packet(seq, 0, 0xE0, params)
-            await client.write_gatt_char(CHAR_COMMAND_UUID, encrypt_packet(session_key, packet, mac_bytes), response=False)
-            await asyncio.sleep(4.0)
+            # Open the confirm watcher BEFORE the 0xE0 write so the push
+            # (arrives within ~4 s, unencrypted) cannot be missed.
+            watcher = AddrConfirmWatcher()
+            try:
+                await client.write_gatt_char(CHAR_COMMAND_UUID, encrypt_packet(session_key, packet, mac_bytes), response=False)
+            except Exception:
+                watcher.close()
+                raise
+            adopted = None
+            if watcher.available:
+                reported = await watcher.wait(timeout=4.0)
+                watcher.close()
+                if reported is not None:
+                    if reported != addr:
+                        _log(f"0xE1: lamp reports addr 0x{reported:04x} (requested 0x{addr:04x}) — adopting")
+                    else:
+                        _log(f"0xE1 confirm: addr 0x{reported:04x}")
+                    adopted = reported
+                else:
+                    _log("no unencrypted 0xE1 confirm within 4 s (monitor up) — settle fallback")
+                    await asyncio.sleep(1.0)
+            else:
+                # HCI monitor unavailable (add-on container): keep the old
+                # blind-settle behavior so the address write can settle.
+                await asyncio.sleep(4.0)
             try:
                 registry.update_seq(registry.load(), mac, seq)
             except Exception:
@@ -458,16 +524,21 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
             state = result[0] if result else None
             if state in (0x07, 0x0F):
                 ok = True
-                msg = f"{mac} provisioned addr={addr} state=0x{state:02x}"
+                shown = adopted if adopted is not None else addr
+                msg = f"{mac} provisioned addr={shown} state=0x{state:02x}"
+                if adopted is not None:
+                    msg += " (0xE1 confirmed)"
+                else:
+                    msg += " (no 0xE1 confirm)"
             else:
                 ok = False
                 msg = f"{mac} pair state 0x{state:02x} (unexpected), addr attempt {addr}"
-            return ok, msg
+            return ok, msg, adopted
     except Exception as e:
         import traceback
         tb = traceback.format_exc()
         _log(f"provision exception for {mac}: {tb}")
-        return False, f"provision failed: {type(e).__name__}: {e}"
+        return False, f"provision failed: {type(e).__name__}: {e}", None
 
 
 @app.route("/api/discover", methods=["POST"])
@@ -589,6 +660,76 @@ def api_group_remove_lamp(name):
     return jsonify({"ok": ok, "msg": msg})
 
 
+@app.route("/api/groups/sync", methods=["POST"])
+def api_groups_sync():
+    """Read a lamp's group memberships FROM the lamp and reconcile groups.json.
+
+    Uses the app-layer short group query 0xDD → 0xD4 (BT-Light APK flow,
+    bench-validated structure in telink-ble-esp32; response = single group-id
+    bytes 0x80XX, 0xFF-terminated — represents group addresses 0x8001..0x80FF).
+
+    Body: {mac} — lamp to query (default: first registry lamp). Read-only
+    reconcile of the LOCAL registry: unknown groups are created (auto-named),
+    stale memberships of THIS lamp are dropped. The lamp itself is never
+    written — use /add and /remove for that.
+    """
+    data = request.get_json(silent=True) or {}
+    lamps = registry.load()
+    mac = data.get("mac")
+    if mac:
+        lamp = next((l for l in lamps if l["mac"].upper() == mac.upper()), None)
+        if not lamp:
+            return jsonify({"ok": False, "msg": f"lamp {mac} not found"}), 404
+    elif lamps:
+        lamp = lamps[0]
+    else:
+        return jsonify({"ok": False, "msg": "no lamps in registry — run discover first"}), 400
+
+    def parse_groups(pkt):
+        return {"groups": parse_short_group_response(pkt), "raw": pkt.hex()}
+
+    results = _query_route(0xDD, bytes([0x10, 0x01]), 0xD4, parse_groups, [lamp], data)
+    first = results[0] if results else None
+    result = first.get("result") if first else None
+    if not isinstance(result, dict) or "groups" not in result:
+        return jsonify({"ok": False,
+                        "msg": f"group query failed: {result if first else 'no result'}",
+                        "results": results}), 502
+
+    reported = result["groups"]
+    mac_u = lamp["mac"].upper()
+    groups = group_registry.load()
+    changed = {"created": [], "added": [], "removed": []}
+
+    for addr in reported:
+        entry = next((g for g in groups if g["address"] == addr), None)
+        if entry is None:
+            base = f"group-{addr:04x}"
+            name, n = base, 1
+            while group_registry.find_by_name(groups, name):
+                n += 1
+                name = f"{base}-{n}"
+            groups, entry = group_registry.create(groups, name)
+            entry["address"] = addr  # keep the lamp-reported address
+            group_registry.add_member(entry, mac_u)
+            changed["created"].append(name)
+        elif group_registry.add_member(entry, mac_u):
+            changed["added"].append(entry["name"])
+
+    # Stale memberships: only drop groups the short format can actually report
+    # (0x8001..0x80FF) — higher addresses are invisible to this query and must
+    # not be treated as removed.
+    reported_set = set(reported)
+    for entry in groups:
+        if entry["address"] <= 0x80FF and entry["address"] not in reported_set \
+                and group_registry.remove_member(entry, mac_u):
+            changed["removed"].append(entry["name"])
+
+    group_registry.save(groups)
+    _log(f"groups sync from {mac_u}: reported={['0x%04x' % a for a in reported]} changed={changed}")
+    return jsonify({"ok": True, "lamp": mac_u, "reported": reported, "changed": changed})
+
+
 # ── command API ──────────────────────────────────────────────────────────
 
 @app.route("/api/command/on", methods=["POST"])
@@ -700,7 +841,10 @@ def api_kick_mesh():
 
 @app.route("/api/lamp/<mac>/delete-pairing", methods=["POST"])
 def api_lamp_delete_pairing(mac):
-    """PAIR_OP_DELETE 0x0E (pairing.md:115) — clear provisioning, advertises as out_of_mesh."""
+    """Reset the lamp to factory state. Tries the 0x0A RESET_MESH proof frame
+    first (protocol doc §4.4; lamp confirms with pair state 0x0B), then falls
+    back to the legacy bare 0x0E DELETE_PAIRING write. Either way the lamp
+    should re-advertise as out_of_mesh afterwards."""
     data = request.get_json(silent=True) or {}
     current_name = data.get("current_name")
     current_password = data.get("current_password")
@@ -725,9 +869,15 @@ def api_lamp_delete_pairing(mac):
                 await pl.apk_login(client, current_name, current_password)
             except Exception as e:
                 return False, f"login failed: {e}"
+            try:
+                if await pl.delete_pairing_proof(client, current_name, current_password):
+                    return True, "delete pairing confirmed (0x0A proof, pair state 0x0B)"
+                _log(f"delete-pairing {mac}: 0x0A proof not confirmed — trying legacy 0x0E")
+            except Exception as e:
+                _log(f"delete-pairing {mac}: 0x0A proof failed ({e}) — trying legacy 0x0E")
             await pl.delete_pairing(client)
             rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
-            return True, f"delete pairing sent, pair_state=0x{rsp[0]:02x}" if rsp else "delete sent (no rsp)"
+            return True, f"legacy 0x0E sent, pair_state=0x{rsp[0]:02x}" if rsp else "legacy 0x0E sent (no rsp)"
 
     paused = os.path.exists(os.path.join(_data_dir(), "daemon_paused"))
     if not paused:
@@ -822,6 +972,24 @@ def api_mesh_get_groups():
         p = pkt[10:] if len(pkt) >= 11 else pkt
         return {"raw": pkt.hex(), "fallback": p.hex()}
     results = _query_route(0x1d, bytes([0x01, 0x01]), 0x14, parse_groups, targets, data)
+    return jsonify({"ok": True, "results": results})
+
+
+@app.route("/api/command/app-get-groups", methods=["POST"])
+def api_app_get_groups():
+    """App-layer short group query 0xDD → 0xD4 (BT-Light APK flow; protocol
+    doc §5.1, validated in telink-ble-esp32). Response params are single
+    group-id bytes (0x8000|b) terminated by 0xFF — represents group addresses
+    0x8001..0x80FF only. Read-only alternative to the mesh-layer 0x1D → 0x14
+    route above (kept for cross-checking)."""
+    data = request.get_json() or {}
+    targets = _get_targets(data)
+    if not targets:
+        return jsonify({"ok": False, "msg": "No targets"})
+    def parse_groups(pkt):
+        groups = parse_short_group_response(pkt)
+        return {"groups": [f"0x{g:04x}" for g in groups], "raw": pkt.hex()}
+    results = _query_route(0xDD, bytes([0x10, 0x01]), 0xD4, parse_groups, targets, data)
     return jsonify({"ok": True, "results": results})
 
 

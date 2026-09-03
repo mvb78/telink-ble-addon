@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.0 - 2026-09-03 (branch `feat/esp32-research-updates` — UNVALIDATED)
+Protocol updates ported from the cross-validated telink-ble-esp32 research
+(`docs/TELINK_MESH_PROTOCOL.md`); hardware/HA validation planned:
+- Delete-pairing via 0x0A + proof frame (pair state 0x0B), legacy bare 0x0E
+  kept as fallback.
+- Provisioning: unencrypted 0xE1 address-confirm watcher (HCI monitor) that
+  adopts the lamp-reported address; notify-char value-write subscribe so the
+  push is sent; blind-settle fallback in-container; bootstrap login now
+  auto-falls back factory creds → target creds (ESP32 recipe §6.2).
+- Short group query 0xDD → 0xD4 (`/api/command/app-get-groups`) and
+  `POST /api/groups/sync` reconciling groups.json from the lamp;
+  "Read groups from lamp" UI button.
+- Unicast addresses 1..250 with auto-allocation (`addr:"auto"`); 1..63
+  UI limit dropped.
+- Discovery probes factory creds `1234, 0000, 123` after `8888`.
+- Host unit tests under `telink-addon/python/tests/` (18 cases).
+- Docs: `docs/TELINK_MESH_PROTOCOL.md` ported (tracked); telink-ble.md gaps
+  refreshed (local, gitignored).
+
 ## 1.1.0 - 2026-09-01
 - 1.1.x production series (Variant B sidecar, groups, HA integration);
   rolls up 1.0.25-1.0.48.

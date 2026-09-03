@@ -150,10 +150,10 @@ async function loadLamps() {
     const addrInput = document.createElement("input");
     addrInput.type = "number";
     addrInput.min = "1";
-    addrInput.max = "63";
+    addrInput.max = "250";
     addrInput.value = l.mesh_address ?? "";
     addrInput.placeholder = "addr";
-    addrInput.title = "Unicast mesh address (1-63). Leave the lamp advertising, then click Assign.";
+    addrInput.title = "Unicast mesh address (1-250; empty = auto-allocate lowest free). Leave the lamp advertising, then click Assign.";
     addrInput.className = "mini-addr";
     addrInput.onclick = (e) => e.stopPropagation();
 
@@ -163,12 +163,12 @@ async function loadLamps() {
     assignBtn.title = "Provision this lamp with the given unicast mesh address (opcode 0xE0)";
     assignBtn.onclick = async (e) => {
       e.stopPropagation();
-      const addrVal = parseInt(addrInput.value, 10);
-      if (!addrVal || addrVal < 1 || addrVal > 63) {
-        log("ERROR: mesh address must be 1-63");
+      const raw = addrInput.value.trim();
+      if (raw !== "" && (isNaN(raw) || +raw < 1 || +raw > 250)) {
+        log("ERROR: mesh address must be 1-250 (or empty for auto)");
         return;
       }
-      const res = await api(`api/lamp/${l.mac}/assign-addr`, { addr: addrVal });
+      const res = await api(`api/lamp/${l.mac}/assign-addr`, { addr: raw === "" ? "auto" : +raw });
       log(`  ${res.ok ? "OK" : "FAILED"}: ${res.msg || ""}`);
       if (res.ok) loadLamps();
     };
@@ -347,6 +347,24 @@ async function refreshMembership() {
   if (activeTarget?.type === "lamp") renderLampMembership();
   else if (activeTarget?.type === "group") renderGroupEdit();
 }
+
+$("membership-sync-btn").addEventListener("click", async () => {
+  if (activeTarget?.type !== "lamp") return;
+  log(`→ read groups from ${activeTarget.name || activeTarget.mac}`);
+  const res = await api("api/groups/sync", { mac: activeTarget.mac });
+  if (!res.ok) {
+    log(`  FAILED: ${res.msg || "sync failed"}`);
+    return;
+  }
+  const c = res.changed || {};
+  const fmt = (a) => `0x${(+a).toString(16).toUpperCase()}`;
+  log(`  lamp reports: ${(res.reported || []).map(fmt).join(", ") || "no groups"}`);
+  if (c.created?.length) log(`  created groups: ${c.created.join(", ")}`);
+  if (c.added?.length) log(`  memberships added: ${c.added.join(", ")}`);
+  if (c.removed?.length) log(`  memberships removed: ${c.removed.join(", ")}`);
+  if (!(c.created?.length || c.added?.length || c.removed?.length)) log("  groups.json already in sync");
+  await refreshMembership();
+});
 
 async function toggleMembership(group, add) {
   const path = `api/groups/${encodeURIComponent(group.name)}/${add ? "add" : "remove"}`;

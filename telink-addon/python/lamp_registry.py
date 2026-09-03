@@ -7,7 +7,7 @@ Schema per entry:
     "name":         "Smart_nSpq",
     "password":     "0000",
     "mesh":         "isolated",     # "isolated" | "shared"
-    "mesh_address": 1               # optional; 1-63 if provisioned
+    "mesh_address": 1               # optional; 1-250 if provisioned
   }
 
 Mesh assignment:
@@ -26,6 +26,39 @@ from config import LAMPS_FILE
 
 MESH_ISOLATED = "isolated"
 MESH_SHARED = "shared"
+
+
+# ── unicast address allocation ───────────────────────────────────────────
+# The BT-Light app allocates the lowest free unicast address of 1..250
+# (protocol doc §3); 0x0000 means "unassigned". The old 1..63 UI limit was
+# arbitrary — the protocol accepts 1..250.
+
+UNICAST_ADDR_MAX = 250
+
+
+def allocate_unicast_addr(lamps: list) -> int:
+    """Lowest free unicast address 1..250 not used by any registry entry."""
+    used = {l.get("mesh_address") for l in lamps}
+    for addr in range(1, UNICAST_ADDR_MAX + 1):
+        if addr not in used:
+            return addr
+    raise ValueError(f"no free unicast address in 1..{UNICAST_ADDR_MAX}")
+
+
+def resolve_unicast_addr(value, lamps: list) -> tuple[int, bool]:
+    """Resolve a requested unicast address. 'auto'/None/'' → lowest free.
+
+    Returns (addr, was_auto); raises ValueError on out-of-range input.
+    """
+    if value is None or value == "auto" or value == "":
+        return allocate_unicast_addr(lamps), True
+    try:
+        addr = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("addr must be an int or 'auto'")
+    if not 1 <= addr <= UNICAST_ADDR_MAX:
+        raise ValueError(f"addr must be 1..{UNICAST_ADDR_MAX} (got {addr})")
+    return addr, False
 
 
 def _mesh_for(password: str) -> str:

@@ -6,8 +6,12 @@ CHAR_PAIR_UUID    = "00010203-0405-0607-0809-0a0b0c0d1914"
 
 VENDOR_ID = 0x0211
 
-# Tried in order during discovery until one passes sample_s verification
-KNOWN_PASSWORDS = ["8888"]
+# Tried in order during discovery until one passes sample_s verification.
+# Bench-validated creds (telink-ble-esp32 research, 2026-09): 8888 = our
+# Smart_qXsx mesh; 1234/0000/123 = factory defaults (Smart_qXsx, Smart_nSpq,
+# out_of_mesh/telink_mesh1) so unprovisioned and foreign-mesh lamps are found.
+DEFAULT_KNOWN_PASSWORDS = ["8888", "1234", "0000", "123"]
+KNOWN_PASSWORDS = list(DEFAULT_KNOWN_PASSWORDS)
 
 from pathlib import Path
 import os as _os
@@ -20,7 +24,7 @@ GROUPS_FILE = str(Path(_DATA_DIR) / "groups.json")
 
 # Known passwords can be overridden via env (add-on option) without editing this file.
 _pw_env = _os.environ.get("TELINK_KNOWN_PASSWORDS")
-KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else ["8888"]
+KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else list(DEFAULT_KNOWN_PASSWORDS)
 
 # Scan duration in seconds during discovery (add-on option).
 SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "45"))
