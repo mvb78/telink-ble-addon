@@ -23,6 +23,8 @@ docs/progress.md
 
 # BLE core reference (local research)
 docs/telink-ble.md
+docs/TELINK_MESH_PROTOCOL.md
+todo.md
 telink-addon/python/groups.json
 telink-addon/python/lamps.json
 .pytest_cache/
