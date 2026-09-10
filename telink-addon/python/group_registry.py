@@ -168,3 +168,46 @@ def remove_member(group: dict, mac: str) -> bool:
         lamps.remove(normalized)
         return True
     return False
+
+
+def reconcile_lamp_groups(groups: list[dict], mac: str, reported: list[int]) -> tuple[list[dict], dict]:
+    """Reconcile one lamp's group memberships with the local registry.
+
+    `reported` is the list of group addresses a lamp returned from the short
+    group query (0xDD -> 0xD4). Creates entries for reported addresses that
+    have no group yet (auto-named ``group-XXXX``), adds `mac` to each reported
+    group, and drops `mac` from groups it is listed in but the lamp did not
+    report.
+
+    Only addresses the short format can actually represent (<= 0x80FF) are
+    eligible for removal — higher addresses are invisible to that query and
+    must stay registry-authoritative. Returns (updated_groups, changed) where
+    changed = {"created": [...], "added": [...], "removed": [...]}.
+    """
+    mac_u = _normalize_mac(mac)
+    changed = {"created": [], "added": [], "removed": []}
+
+    for addr in reported:
+        if not (GROUP_ADDR_MIN <= addr <= GROUP_ADDR_MAX):
+            continue
+        entry = next((g for g in groups if g["address"] == addr), None)
+        if entry is None:
+            base = f"group-{addr:04x}"
+            name, n = base, 1
+            while find_by_name(groups, name):
+                n += 1
+                name = f"{base}-{n}"
+            groups, entry = create(groups, name)
+            entry["address"] = addr  # keep the lamp-reported address
+            add_member(entry, mac_u)
+            changed["created"].append(name)
+        elif add_member(entry, mac_u):
+            changed["added"].append(entry["name"])
+
+    reported_set = set(reported)
+    for entry in groups:
+        if entry["address"] <= 0x80FF and entry["address"] not in reported_set \
+                and remove_member(entry, mac_u):
+            changed["removed"].append(entry["name"])
+
+    return groups, changed

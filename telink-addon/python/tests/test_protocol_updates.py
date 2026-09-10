@@ -18,6 +18,7 @@ from lamp_registry import UNICAST_ADDR_MAX, allocate_unicast_addr, resolve_unica
 from telink_crypto import build_delete_pairing_frame, derive_base_key, java_aes
 from telink_mesh import parse_short_group_response
 from telink_ble import AddrConfirmWatcher
+from group_registry import reconcile_lamp_groups
 
 
 # ── 0x0A delete-pairing proof frame ──────────────────────────────────────
@@ -205,3 +206,69 @@ def test_resolve_rejects_out_of_range_and_garbage():
             raise AssertionError(f"expected ValueError for {bad!r}")
         except ValueError:
             pass
+
+
+# ── groups.json reconcile from a lamp's reported memberships ────────────
+
+MAC = "AA:BB:CC:DD:EE:FF"
+
+
+def _group(addr, name, lamps=None):
+    return {"name": name, "address": addr, "lamps": lamps or []}
+
+
+def test_reconcile_creates_missing_groups():
+    groups, changed = reconcile_lamp_groups([], MAC, [0x8001, 0x8003])
+    assert changed == {"created": ["group-8001", "group-8003"], "added": [], "removed": []}
+    by_addr = {g["address"]: g for g in groups}
+    assert set(by_addr) == {0x8001, 0x8003}
+    assert by_addr[0x8001]["lamps"] == [MAC]
+    assert by_addr[0x8003]["lamps"] == [MAC]
+
+
+def test_reconcile_adds_existing_membership():
+    groups = [_group(0x8001, "kitchen")]
+    groups, changed = reconcile_lamp_groups(groups, MAC, [0x8001])
+    assert changed == {"created": [], "added": ["kitchen"], "removed": []}
+    assert groups[0]["lamps"] == [MAC]
+
+
+def test_reconcile_noop_when_already_in_sync():
+    groups = [_group(0x8001, "kitchen", [MAC])]
+    groups, changed = reconcile_lamp_groups(groups, MAC, [0x8001])
+    assert changed == {"created": [], "added": [], "removed": []}
+    assert groups[0]["lamps"] == [MAC]
+
+
+def test_reconcile_removes_stale_membership():
+    groups = [_group(0x8002, "stale", [MAC]), _group(0x8005, "keep", [MAC])]
+    groups, changed = reconcile_lamp_groups(groups, MAC, [0x8005])
+    assert changed == {"created": [], "added": [], "removed": ["stale"]}
+    by_name = {g["name"]: g for g in groups}
+    assert by_name["stale"]["lamps"] == []
+    assert by_name["keep"]["lamps"] == [MAC]
+
+
+def test_reconcile_keeps_unreportable_high_addresses():
+    # 0x8100 cannot be represented by the short (0x80XX) query — must not be
+    # treated as removed just because the lamp did not report it.
+    groups = [_group(0x8100, "high", [MAC])]
+    groups, changed = reconcile_lamp_groups(groups, MAC, [])
+    assert changed == {"created": [], "added": [], "removed": []}
+    assert groups[0]["lamps"] == [MAC]
+
+
+def test_reconcile_name_collision_gets_suffix():
+    groups = [_group(0x9000, "group-8001", [])]
+    groups, changed = reconcile_lamp_groups(groups, MAC, [0x8001])
+    assert changed["created"] == ["group-8001-2"]
+    by_addr = {g["address"]: g for g in groups}
+    assert by_addr[0x8001]["name"] == "group-8001-2"
+    assert by_addr[0x8001]["lamps"] == [MAC]
+    assert by_addr[0x9000]["name"] == "group-8001"
+
+
+def test_reconcile_ignores_out_of_range_reported():
+    groups, changed = reconcile_lamp_groups([], MAC, [0x7FFF, 0xFFFF])
+    assert changed == {"created": [], "added": [], "removed": []}
+    assert groups == []

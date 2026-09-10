@@ -699,32 +699,7 @@ def api_groups_sync():
     reported = result["groups"]
     mac_u = lamp["mac"].upper()
     groups = group_registry.load()
-    changed = {"created": [], "added": [], "removed": []}
-
-    for addr in reported:
-        entry = next((g for g in groups if g["address"] == addr), None)
-        if entry is None:
-            base = f"group-{addr:04x}"
-            name, n = base, 1
-            while group_registry.find_by_name(groups, name):
-                n += 1
-                name = f"{base}-{n}"
-            groups, entry = group_registry.create(groups, name)
-            entry["address"] = addr  # keep the lamp-reported address
-            group_registry.add_member(entry, mac_u)
-            changed["created"].append(name)
-        elif group_registry.add_member(entry, mac_u):
-            changed["added"].append(entry["name"])
-
-    # Stale memberships: only drop groups the short format can actually report
-    # (0x8001..0x80FF) — higher addresses are invisible to this query and must
-    # not be treated as removed.
-    reported_set = set(reported)
-    for entry in groups:
-        if entry["address"] <= 0x80FF and entry["address"] not in reported_set \
-                and group_registry.remove_member(entry, mac_u):
-            changed["removed"].append(entry["name"])
-
+    groups, changed = group_registry.reconcile_lamp_groups(groups, mac_u, reported)
     group_registry.save(groups)
     _log(f"groups sync from {mac_u}: reported={['0x%04x' % a for a in reported]} changed={changed}")
     return jsonify({"ok": True, "lamp": mac_u, "reported": reported, "changed": changed})
