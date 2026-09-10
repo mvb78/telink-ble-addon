@@ -17,6 +17,7 @@ venv/
 
 # opencode / session notes
 opencode.txt
+.opencode/
 CLAUDE.md
 progress.md
 docs/progress.md
