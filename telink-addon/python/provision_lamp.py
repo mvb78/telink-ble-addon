@@ -40,10 +40,35 @@ def encrypt_pair_data(session_key: bytes, data: bytearray) -> bytearray:
     return result
 
 
-async def apk_login(client: BleakClient, name: str, password: str) -> bytes:
+async def login_with_random_exchange(client: BleakClient, name: str, password: str,
+                                     nonce: bytes | None = None, sleep_after_write: float = 0.5) -> bytes:
+    """State-driven login handshake (pairing.md §1-2).
+
+    `nonce` lets callers pin the client random (the bootstrap flow uses the
+    fixed A0..A7); when None a random r1 is generated. When the lamp reports
+    an Idle/Init pair state (0x00/0x0E) — typical of factory/unprovisioned
+    lamps — the PAIR_OP_EXCHANGE_RANDOM (0x01) step is performed first: a
+    direct 0x0C write is otherwise rejected with pair state 0x0E. Lamps that
+    already accept 0x0C directly (in-mesh) are untouched.
+
+    Returns the session key.
+    """
+    r1 = nonce if nonce is not None else os.urandom(8)
     base_key = derive_base_key(name, password)
-    r1 = os.urandom(8)
     challenge = build_challenge(base_key, r1)
+
+    try:
+        probe = await client.read_gatt_char(CHAR_PAIR_UUID)
+        state = probe[0] if probe else None
+    except Exception:
+        state = None
+
+    if state in (0x00, 0x0E):  # Idle / Init -> random exchange first
+        await client.write_gatt_char(CHAR_PAIR_UUID, bytes([0x01]) + r1, response=True)
+        await asyncio.sleep(0.5)
+        rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
+        if not rsp or rsp[0] not in (0x02, 0x03):
+            raise Exception(f"Random exchange rejected: state=0x{rsp[0]:02x}" if rsp else "no response")
 
     payload = bytearray(17)
     payload[0] = 0x0C
@@ -51,7 +76,7 @@ async def apk_login(client: BleakClient, name: str, password: str) -> bytes:
     payload[9:17] = challenge
 
     await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
-    await asyncio.sleep(0.5)
+    await asyncio.sleep(sleep_after_write)
 
     rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
     if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
@@ -63,7 +88,11 @@ async def apk_login(client: BleakClient, name: str, password: str) -> bytes:
     if not verify_sample_s(name, password, r2, sample_s):
         raise Exception("sample_s verification failed — wrong password")
 
-    session_key = get_session_key(name, password, r1, r2)
+    return get_session_key(name, password, r1, r2)
+
+
+async def apk_login(client: BleakClient, name: str, password: str) -> bytes:
+    session_key = await login_with_random_exchange(client, name, password)
     print(f"  Authenticated OK (session_key={session_key.hex()})")
     return session_key
 

@@ -9,6 +9,10 @@ Protocol updates ported from the cross-validated telink-ble-esp32 research
   adopts the lamp-reported address; notify-char value-write subscribe so the
   push is sent; blind-settle fallback in-container; bootstrap login now
   auto-falls back factory creds → target creds (ESP32 recipe §6.2).
+- Login: state-driven 0x01 EXCHANGE_RANDOM handshake for Idle/Init lamps
+  (`login_with_random_exchange`). Live-tested on HA: 0x01 accepted, but 0x0C
+  still 0x0E on the spare factory lamps — factory login unresolved (shared
+  with telink-ble-esp32).
 - Short group query 0xDD → 0xD4 (`/api/command/app-get-groups`) and
   `POST /api/groups/sync` reconciling groups.json from the lamp;
   "Read groups from lamp" UI button.

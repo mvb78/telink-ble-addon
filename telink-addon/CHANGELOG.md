@@ -18,6 +18,14 @@ Protocol updates ported from the cross-validated telink-ble-esp32 research
   `bootstrap:true` and no explicit current creds the flow now tries factory
   `out_of_mesh`/`123` first, then the target mesh creds, so a fresh or kicked
   lamp provisions without passing current_name/current_password.
+- **State-driven login** (pairing.md §1-2) — `provision_lamp.login_with_random_exchange`
+  reads the pair state and performs the `0x01 EXCHANGE_RANDOM` handshake first
+  for Idle/Init (0x00/0x0E) lamps, the documented prerequisite for
+  factory/unprovisioned lamps that reject a direct `0x0C` with pair state
+  `0x0E`. Live test on HA (2026-09-10): the `0x01` exchange is accepted
+  (0x00 → 0x02) on the two spare lamps, but `0x0C` still returns `0x0E` for
+  every credential candidate — **factory login remains UNRESOLVED** (same
+  blocker as telink-ble-esp32).
 - **Short group query 0xDD → 0xD4** (app-layer, BT-Light APK flow) as
   `/api/command/app-get-groups`, plus **`POST /api/groups/sync`** which reads
   a lamp's group memberships and reconciles groups.json (creates unknown

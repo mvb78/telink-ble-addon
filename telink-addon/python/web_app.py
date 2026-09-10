@@ -428,30 +428,22 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
                 # ESP32 recipe (protocol doc §6.2): try the factory creds first
                 # (fresh/kicked lamp), then the target mesh creds (re-provision).
                 # Explicit current_name/current_password always win.
-                from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
-                from config import CHAR_PAIR_UUID as _PAIR
                 R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
 
                 async def _bootstrap_attempt(bk_name, bk_pwd):
-                    """One bootstrap login attempt; returns session_key or None."""
-                    base_key = derive_base_key(bk_name, bk_pwd)
-                    challenge = build_challenge(base_key, R_APP)
-                    payload = bytearray(17)
-                    payload[0] = 0x0C
-                    payload[1:9] = R_APP
-                    payload[9:17] = challenge
-                    await client.write_gatt_char(_PAIR, bytes(payload), response=True)
-                    await asyncio.sleep(0.6)
-                    rsp = await client.read_gatt_char(_PAIR)
-                    if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
-                        _log(f"bootstrap login rejected with '{bk_name}': rsp=0x{rsp.hex() if rsp else 'none'}")
+                    """One bootstrap login attempt; returns session_key or None.
+
+                    Uses the state-driven handshake (0x01 EXCHANGE_RANDOM for
+                    Idle/Init lamps) with the fixed nonce, mirroring the
+                    pairing.md flow — factory lamps reject a direct 0x0C with
+                    pair state 0x0E.
+                    """
+                    try:
+                        return await pl.login_with_random_exchange(
+                            client, bk_name, bk_pwd, nonce=R_APP, sleep_after_write=0.6)
+                    except Exception as e:
+                        _log(f"bootstrap login rejected with '{bk_name}': {e}")
                         return None
-                    r2 = bytes(rsp[1:9])
-                    sample_s = bytes(rsp[9:17])
-                    if not verify_sample_s(bk_name, bk_pwd, r2, sample_s):
-                        _log(f"bootstrap sample_s mismatch with '{bk_name}'")
-                        return None
-                    return get_session_key(bk_name, bk_pwd, R_APP, r2)
 
                 if current_name and current_password:
                     attempts = [(login_name, login_password)]
