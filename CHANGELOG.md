@@ -1,6 +1,8 @@
 # Changelog
 
 ## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
+- Permanent connections (`TELINK_IDLE_TIMEOUT=0`) + health-check keepalive that
+  detects dead links; fast event-driven reconnect (~0.25 s instead of 5-30 s).
 - Daemon status query parallelized: bulk status 1.5 s → 0.4 s (4 lamps).
 - `[notify]` frame logging gated behind `TELINK_DEBUG_NOTIFY` (was 14k lines/h).
 - Group relay: try each candidate session before the slow direct-connect fallback.

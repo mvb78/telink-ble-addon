@@ -1,12 +1,21 @@
 # Changelog
 
 ## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
+- **Permanent connections** (the old CLI's fast model): `TELINK_IDLE_TIMEOUT=0`
+  disables the idle-release sweeper (`deploy_sidecar.sh` now sets it); the
+  health-check keepalive keeps sessions alive and detects dead links.
+- **Health-check keepalive**: the 0xDA keepalive now expects the lamp's 0xDB
+  reply; two missed replies drop the link so the next command reconnects fast
+  instead of hanging on a half-dead session.
+- **Fast reconnect**: `TelinkController.connect` scans event-driven (checks the
+  scanner every 0.25 s) instead of sleeping 5 s before the first look —
+  reconnect went from >=5 s (up to 30 s) to ~0.25 s when a lamp is advertising.
 - **Parallel status query**: the daemon now queries all lamp sessions
   concurrently (`asyncio.gather`), so bulk status dropped from ~1.5 s to ~0.4 s
   for 4 lamps (measured live).
 - **Notify-log spam gated**: `TELINK_DEBUG_NOTIFY` (default off) now controls
-  the per-frame `[notify]` print that wrote 14k+ lines/hour (514k total) to the
-  daemon log — significant I/O + event-loop overhead removed.
+  the per-frame `[notify]` print that wrote 14k+ lines/hour (514k total);
+  daemon log volume dropped ~27x.
 - **Group relay robustness**: `_execute` tries each candidate relay session in
   turn before the direct-connect fallback, so a temporarily-missing session
   fails fast instead of triggering a 5-30 s BLE scan.

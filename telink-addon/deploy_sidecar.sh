@@ -37,6 +37,7 @@ docker run -d --name "$NAME" \
   -v "$DATA_DIR":/data \
   -e TELINK_DATA_DIR=/data \
   -e TELINK_KNOWN_PASSWORDS=8888 \
+  -e TELINK_IDLE_TIMEOUT=0 \
   -e TELINK_DAEMON_HOST=0.0.0.0 \
   -e TELINK_DAEMON_PORT=8097 \
   "$IMAGE" \

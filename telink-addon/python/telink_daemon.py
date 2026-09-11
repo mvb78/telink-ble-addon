@@ -46,8 +46,10 @@ _STATUS_PARAMS = bytes([0x10] + [0] * 9)
 _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
 # Release a lamp's connection after this many seconds without a command. Telink
 # mesh lamps stop advertising while connected, so holding sessions forever can
-# strand them in a silent state (the bench's brief-connection model never had
-# this problem). Sessions reconnect on demand.
+# strand them in a silent state. TELINK_IDLE_TIMEOUT=0 (or negative) keeps the
+# connection permanently — the daemon's health-check keepalive then handles
+# dead links proactively instead (the old CLI's fast permanent-connection
+# model). Sessions reconnect on demand.
 IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 
 
@@ -165,14 +167,41 @@ class DaemonSession:
         print(f"  [{self.lamp['name']}] reconnected", flush=True)
 
     async def _keepalive_loop(self):
+        failed = 0
+        loop = asyncio.get_event_loop()
         while True:
             await asyncio.sleep(5.0)
-            idle = asyncio.get_event_loop().time() - self._last_cmd_time
-            if idle >= _KEEPALIVE_INTERVAL:
+            idle = loop.time() - self._last_cmd_time
+            if idle < _KEEPALIVE_INTERVAL:
+                continue
+            try:
+                async with self._lock:
+                    if not self.ctrl.client or not self.ctrl.client.is_connected:
+                        await self._reconnect()
+                        continue
+                    await self.ctrl.send_command(0xDA, _STATUS_PARAMS, 0xFFFF)
+                    # Health check: the lamp pushes its own 0xDB on the keepalive.
+                    # No reply two keepalives in a row -> drop the link so the
+                    # next command reconnects fast instead of hanging on a
+                    # half-dead session.
+                    got = await self.ctrl.wait_for_opcode(0xDB, timeout=1.0)
+                    if got is None:
+                        failed += 1
+                        if failed >= 2:
+                            print(f"  [{self.lamp['name']}] keepalive unresponsive - dropping link", flush=True)
+                            try:
+                                await self.ctrl.disconnect()
+                            except Exception:
+                                pass
+                            failed = 0
+                            continue
+                    else:
+                        failed = 0
+                    self._last_cmd_time = loop.time()
+            except Exception:
+                # Link error: drop it so the next command reconnects.
                 try:
-                    async with self._lock:
-                        await self.ctrl.send_command(0xDA, _STATUS_PARAMS, 0xFFFF)
-                        self._last_cmd_time = asyncio.get_event_loop().time()
+                    await self.ctrl.disconnect()
                 except Exception:
                     pass
 
@@ -436,11 +465,14 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
 
 
 async def _idle_sweeper(sessions: dict[str, DaemonSession], stop_event: asyncio.Event) -> None:
-    """Release connections that have been idle too long so the lamps go back
-    to advertising and stay reachable (mirrors the bench's brief-connection
-    model). Sessions are kept in the dict and reconnect on the next command."""
+    """Release connections idle too long (TELINK_IDLE_TIMEOUT>0) so the lamps go
+    back to advertising and stay reachable. With TELINK_IDLE_TIMEOUT=0 the
+    daemon keeps connections permanently (health-check keepalive handles dead
+    links). Sessions are kept in the dict and reconnect on the next command."""
     while not stop_event.is_set():
         await asyncio.sleep(10.0)
+        if IDLE_TIMEOUT <= 0:
+            continue
         now = asyncio.get_event_loop().time()
         for mac, sess in list(sessions.items()):
             connected = sess.ctrl.client and sess.ctrl.client.is_connected

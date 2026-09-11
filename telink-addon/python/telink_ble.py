@@ -199,7 +199,7 @@ class TelinkController:
         self._monitor_task: asyncio.Task | None = None
         self._monitor_sock: socket.socket | None = None
 
-    async def connect(self):
+    async def connect(self, timeout: float = 8.0):
         print(f"  Scanning for {self.name} ({self.mac}) ...")
         target = None
 
@@ -210,9 +210,14 @@ class TelinkController:
             if device.address.upper() == self.mac:
                 target = device
 
+        # Event-driven scan: check the callback result every 0.25 s instead of
+        # sleeping 5 s before the first look — a lamp that is advertising is
+        # found in ~0.25 s, not >=5 s (this was the reconnect penalty).
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
         async with BleakScanner(callback) as scanner:
-            for _ in range(6):
-                await asyncio.sleep(5.0)
+            while loop.time() < deadline:
+                await asyncio.sleep(0.25)
                 if target:
                     break
 
