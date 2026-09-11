@@ -97,32 +97,47 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Individual add-on endpoints may fail (or hang) when the Telink lamps
         # are asleep / not advertising. Rather than fail the whole update (which
         # would trip the config entry into setup_retry), degrade gracefully:
-        # keep last-known lamps/groups and mark entities unavailable.
-        try:
-            lamps = await self.get_lamps()
-        except UpdateFailed:
-            lamps = (self.data or {}).get("lamps", [])
-        try:
-            groups = await self.get_groups()
-        except UpdateFailed:
-            groups = (self.data or {}).get("groups", [])
-
+        # keep last-known lamps/groups and mark entities unavailable. All four
+        # requests run concurrently so a poll costs ~the slowest one, not the sum.
+        lamps = (self.data or {}).get("lamps", [])
+        groups = (self.data or {}).get("groups", [])
+        connected = (self.data or {}).get("connected", False)
         by_mac: dict[str, dict] = {}
-        try:
-            statuses = await self.get_status_all()
-            for item in statuses:
-                entry = item.get("result")
-                mac = item.get("mac")
-                if mac and isinstance(entry, dict):
-                    by_mac[mac.lower()] = entry
-        except UpdateFailed:
-            _LOGGER.debug("Telink status poll failed; lamps likely offline")
 
-        try:
-            daemon = await self._request("GET", API_DAEMON, total=10)
-            connected = _as_bool(daemon.get("running"))
-        except UpdateFailed:
-            connected = (self.data or {}).get("connected", False)
+        async def _fetch_lamps():
+            nonlocal lamps
+            try:
+                lamps = await self.get_lamps()
+            except UpdateFailed:
+                _LOGGER.debug("Telink lamps fetch failed; keeping last-known")
+
+        async def _fetch_groups():
+            nonlocal groups
+            try:
+                groups = await self.get_groups()
+            except UpdateFailed:
+                _LOGGER.debug("Telink groups fetch failed; keeping last-known")
+
+        async def _fetch_status():
+            try:
+                statuses = await self.get_status_all()
+                for item in statuses:
+                    entry = item.get("result")
+                    mac = item.get("mac")
+                    if mac and isinstance(entry, dict):
+                        by_mac[mac.lower()] = entry
+            except UpdateFailed:
+                _LOGGER.debug("Telink status poll failed; lamps likely offline")
+
+        async def _fetch_daemon():
+            nonlocal connected
+            try:
+                daemon = await self._request("GET", API_DAEMON, total=10)
+                connected = _as_bool(daemon.get("running"))
+            except UpdateFailed:
+                _LOGGER.debug("Telink daemon liveness check failed; keeping last-known")
+
+        await asyncio.gather(_fetch_lamps(), _fetch_groups(), _fetch_status(), _fetch_daemon())
 
         return {
             "lamps": lamps,

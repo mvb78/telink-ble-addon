@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
+- **Parallel status query**: the daemon now queries all lamp sessions
+  concurrently (`asyncio.gather`), so bulk status dropped from ~1.5 s to ~0.4 s
+  for 4 lamps (measured live).
+- **Notify-log spam gated**: `TELINK_DEBUG_NOTIFY` (default off) now controls
+  the per-frame `[notify]` print that wrote 14k+ lines/hour (514k total) to the
+  daemon log — significant I/O + event-loop overhead removed.
+- **Group relay robustness**: `_execute` tries each candidate relay session in
+  turn before the direct-connect fallback, so a temporarily-missing session
+  fails fast instead of triggering a 5-30 s BLE scan.
+- **Integration availability**: light entities now use the coordinator's
+  `last_update_success` instead of the daemon `connected` flag — a single
+  failed poll can no longer flip every light unavailable (that caused
+  automations to no-op for hours).
+- **Integration poll parallelized**: lamps/groups/status/daemon fetched
+  concurrently per poll.
+
 ## 1.2.0 - 2026-09-03 (UNVALIDATED — bench/HA test pending)
 Protocol updates ported from the cross-validated telink-ble-esp32 research
 (docs/TELINK_MESH_PROTOCOL.md):

@@ -33,6 +33,11 @@ from telink_mesh import SequenceManager, build_mesh_packet
 
 BROADCAST = 0xFFFF
 
+# Debug: print every decrypted notification. Very noisy (10k+ lines/hour on a
+# live mesh) — it also slows the daemon's event loop via stdout I/O. Off by
+# default; enable with TELINK_DEBUG_NOTIFY=1 when capturing frames.
+DEBUG_NOTIFY = os.environ.get("TELINK_DEBUG_NOTIFY", "").lower() in ("1", "true", "yes")
+
 # ATT_NOTIFY opcode + handle 0x0012 (little-endian) — 3-byte prefix we scan for
 _ATT_NOTIFY_PREFIX = bytes([0x1B, 0x12, 0x00])
 
@@ -423,7 +428,8 @@ class TelinkController:
                     self._notify_queue.get(), timeout=min(remaining, 0.5)
                 )
                 collected.append(pkt)
-                print(f"  [notify] opcode=0x{pkt[7]:02X}  raw={pkt.hex()}")
+                if DEBUG_NOTIFY:
+                    print(f"  [notify] opcode=0x{pkt[7]:02X}  raw={pkt.hex()}")
             except asyncio.TimeoutError:
                 continue
         return collected

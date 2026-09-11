@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
+- Daemon status query parallelized: bulk status 1.5 s → 0.4 s (4 lamps).
+- `[notify]` frame logging gated behind `TELINK_DEBUG_NOTIFY` (was 14k lines/h).
+- Group relay: try each candidate session before the slow direct-connect fallback.
+- Integration: availability via `last_update_success` (no more flapping that
+  made automations no-op); coordinator poll requests run concurrently.
+- Live fix on HA: reloaded the orphaned integration (all entities were
+  "no longer being provided" since the Sep-10 restart), restored polling,
+  confirmed `light.turn_off` service call at ~0.8 s end-to-end.
+
 ## 1.2.0 - 2026-09-03 (branch `feat/esp32-research-updates` — UNVALIDATED)
 Protocol updates ported from the cross-validated telink-ble-esp32 research
 (`docs/TELINK_MESH_PROTOCOL.md`); hardware/HA validation planned:

@@ -250,23 +250,31 @@ async def _handle_client(
                 resp = {"status": "error",
                         "msg": "; ".join(errors) if errors else "no responses"}
         elif req.get("kind") == "query":
-            # Query commands respond per-lamp; collect each session's answer.
+            # Query commands respond per-lamp; query every session in parallel
+            # (each session owns its own lamp's connection and decrypts only its
+            # own frames), so status for N lamps takes ~1 query time, not N.
             response_opcode = req.get("response_opcode", 0xDB)
             results = []
             errors = []
-            for sess in targets:
+
+            async def _one(sess):
                 try:
                     pkt = await sess.query(opcode, params, response_opcode)
                     if pkt:
-                        results.append({
-                            "mac": sess.lamp["mac"],
-                            "name": sess.lamp["name"],
-                            "payload": list(pkt),
-                        })
-                    else:
-                        errors.append(f"{sess.lamp['name']}: no response")
+                        return {"ok": True, "sess": sess, "pkt": pkt}
+                    return {"ok": False, "sess": sess, "err": "no response"}
                 except Exception as e:
-                    errors.append(f"{sess.lamp['name']}: {e}")
+                    return {"ok": False, "sess": sess, "err": str(e)}
+
+            for outcome in await asyncio.gather(*[_one(s) for s in targets]):
+                if outcome["ok"]:
+                    results.append({
+                        "mac": outcome["sess"].lamp["mac"],
+                        "name": outcome["sess"].lamp["name"],
+                        "payload": list(outcome["pkt"]),
+                    })
+                else:
+                    errors.append(f"{outcome['sess'].lamp['name']}: {outcome['err']}")
             if results:
                 resp = {"status": "ok", "results": results,
                         "errors": errors if errors else None}

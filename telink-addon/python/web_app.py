@@ -90,22 +90,25 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     For a plain broadcast command the mesh fabric relays one packet to every
     member, so we ask the daemon (mac=None -> all sessions) and only fall back
     to direct connect if the daemon can't cover them. When a specific `dst`
-    (group/unicast) is given, one relay lamp is enough -> expected=1.
+    (group) is given, ONE working relay lamp is enough -> expected=1; we try
+    each candidate relay in turn so a temporarily-missing session fails fast
+    to another instead of falling into the slow direct-connect scan.
     """
     if not targets:
         return False, "No targets"
     if dst is not None:
         # Explicit mesh destination: one working relay lamp injects the packet.
-        # Prefer a lamp that is currently provisioned in the mesh (current
-        # `Smart_mesh`/`8888` creds) over e.g. a broken/out-of-mesh head.
-        relay = next((t for t in targets if t.get("password") == "8888"), targets[0])
-        selector, send_mac, expected = "all", relay["mac"], 1
+        # Prefer lamps currently provisioned in the mesh (password==8888) over
+        # e.g. a broken/out-of-mesh head.
+        candidates = ([t for t in targets if t.get("password") == "8888"]
+                      + [t for t in targets if t.get("password") != "8888"])
+        selector, expected = "all", 1
     elif mac is not None:
-        selector, send_mac, expected = "all", mac, 1
+        selector, expected, candidates = "all", 1, None
     else:
         # Broadcast to all: the mesh fabric relays ONE packet to every member,
         # so any connected session is enough; we accept whatever the daemon did.
-        selector, send_mac, expected = "all", None, None
+        selector, expected, candidates = "all", None, None
     # Packet destination: explicit group dst wins; then unicast to a single
     # provisioned lamp's own mesh address (so one lamp ≠ all lamps); else broadcast.
     if dst is not None:
@@ -114,8 +117,14 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
         packet_address = int(targets[0]["mesh_address"])
     else:
         packet_address = BROADCAST
-    if _try_daemon(opcode, params, selector, send_mac, packet_address, expected_count=expected):
-        return True, "OK (daemon)"
+    if candidates is None:
+        send_mac = mac
+        if _try_daemon(opcode, params, selector, send_mac, packet_address, expected_count=expected):
+            return True, "OK (daemon)"
+    else:
+        for relay in candidates:
+            if _try_daemon(opcode, params, selector, relay["mac"], packet_address, expected_count=expected):
+                return True, f"OK (daemon via {relay['mac']})"
     ok = await run_on_lamp(targets[0], opcode, params, packet_address)
     return (True, "OK (direct)") if ok else (False, "direct connect failed")
 

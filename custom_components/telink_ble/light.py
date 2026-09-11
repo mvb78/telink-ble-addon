@@ -103,11 +103,11 @@ class _TelinkBaseLight(CoordinatorEntity, LightEntity):
 
     @property
     def available(self) -> bool:
-        coordinator_data = self.coordinator.data
-        return bool(
-            coordinator_data
-            and coordinator_data.get("connected")
-        )
+        # Default CoordinatorEntity behaviour: available while the add-on
+        # responds. The add-on degrades gracefully (keeps last-known data on a
+        # failed poll), so a single failed poll must NOT make lights
+        # unavailable — that previously caused automations to no-op for hours.
+        return self.coordinator.last_update_success
 
     @property
     def device_info(self):
