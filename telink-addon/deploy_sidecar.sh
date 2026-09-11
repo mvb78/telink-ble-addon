@@ -8,7 +8,7 @@
 # Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.2.0)
 set -euo pipefail
 
-TAG="${1:-1.2.0}"
+TAG="${1:-1.3.0}"
 IMAGE="ghcr.io/mvb78/telink-ble-cli:${TAG}"
 NAME="telink-daemon"
 ADDON_CT="app_c4c18bb5_telink_ble_cli"
