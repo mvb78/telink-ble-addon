@@ -29,10 +29,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import (
-    API_CMD_BRIGHTNESS,
-    API_CMD_COLORTEMP,
-    API_CMD_OFF,
-    API_CMD_ON,
+    API_CMD_SET,
     DOMAIN,
     VAL_MAX,
     VAL_MIN,
@@ -129,6 +126,11 @@ class TelinkLampLight(_TelinkBaseLight):
         self._attr_unique_id = f"telink_ble_{self._mac}"
         self._attr_name = f"Telink {self._name}"
         self._attr_should_poll = False
+        # Optimistic overrides applied right after a command; cleared when the
+        # next polled status arrives, so state responds instantly to controls.
+        self._opt_on: bool | None = None
+        self._opt_brightness: int | None = None
+        self._opt_color_temp: int | None = None
 
     @property
     def _status(self) -> dict | None:
@@ -137,13 +139,18 @@ class TelinkLampLight(_TelinkBaseLight):
 
     @property
     def is_on(self) -> bool | None:
+        if self._opt_on is not None:
+            return self._opt_on
         status = self._status
         if status is None:
             return None
-        return status.get("state") == "ON"
+        # These lamps always report state:"ON" — "off" is brightness 0.
+        return int(status.get("brightness", 0)) > 0
 
     @property
     def brightness(self) -> int | None:
+        if self._opt_brightness is not None:
+            return self._opt_brightness
         status = self._status
         if status is None:
             return None
@@ -151,6 +158,8 @@ class TelinkLampLight(_TelinkBaseLight):
 
     @property
     def color_temp_kelvin(self) -> int | None:
+        if self._opt_color_temp is not None:
+            return self._opt_color_temp
         status = self._status
         if status is None:
             return None
@@ -161,22 +170,33 @@ class TelinkLampLight(_TelinkBaseLight):
         return warm_pct_to_kelvin(int(pct))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.coordinator.send_command(API_CMD_ON, {"mac": self._mac})
+        payload: dict[str, Any] = {"mac": self._mac, "on": True}
         if kwargs.get(ATTR_BRIGHTNESS) is not None:
-            await self.coordinator.send_command(
-                API_CMD_BRIGHTNESS, {"mac": self._mac,
-                                     "value": brightness_ha_to_val(int(kwargs[ATTR_BRIGHTNESS]))}
-            )
+            ha_b = int(kwargs[ATTR_BRIGHTNESS])
+            payload["brightness"] = brightness_ha_to_val(ha_b)
+            self._opt_brightness = ha_b
         if kwargs.get(ATTR_COLOR_TEMP_KELVIN) is not None:
-            await self.coordinator.send_command(
-                API_CMD_COLORTEMP, {"mac": self._mac,
-                                    "value": kelvin_to_warm_pct(int(kwargs[ATTR_COLOR_TEMP_KELVIN]))}
-            )
+            k = int(kwargs[ATTR_COLOR_TEMP_KELVIN])
+            payload["colortemp"] = kelvin_to_warm_pct(k)
+            self._opt_color_temp = k
+        await self.coordinator.send_command(API_CMD_SET, payload)
+        self._opt_on = True
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.coordinator.send_command(API_CMD_OFF, {"mac": self._mac})
+        await self.coordinator.send_command(API_CMD_SET, {"mac": self._mac, "on": False})
+        self._opt_on = False
+        self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # Fresh polled status is now authoritative — drop optimistic overrides.
+        self._opt_on = None
+        self._opt_brightness = None
+        self._opt_color_temp = None
+        self.async_write_ha_state()
 
 
 class TelinkGroupLight(_TelinkBaseLight):
@@ -210,26 +230,22 @@ class TelinkGroupLight(_TelinkBaseLight):
         return self._color_temp_kelvin
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        await self.coordinator.send_command(API_CMD_ON, {"dst": self._addr})
+        payload: dict[str, Any] = {"dst": self._addr, "on": True}
         if kwargs.get(ATTR_BRIGHTNESS) is not None:
-            await self.coordinator.send_command(
-                API_CMD_BRIGHTNESS, {"dst": self._addr,
-                                     "value": brightness_ha_to_val(int(kwargs[ATTR_BRIGHTNESS]))}
-            )
-            self._brightness = int(kwargs[ATTR_BRIGHTNESS])
+            ha_b = int(kwargs[ATTR_BRIGHTNESS])
+            payload["brightness"] = brightness_ha_to_val(ha_b)
+            self._brightness = ha_b
         if kwargs.get(ATTR_COLOR_TEMP_KELVIN) is not None:
             k = int(kwargs[ATTR_COLOR_TEMP_KELVIN])
-            await self.coordinator.send_command(
-                API_CMD_COLORTEMP, {"dst": self._addr,
-                                    "value": kelvin_to_warm_pct(k)}
-            )
+            payload["colortemp"] = kelvin_to_warm_pct(k)
             self._color_temp_kelvin = k
+        await self.coordinator.send_command(API_CMD_SET, payload)
         self._on = True
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        await self.coordinator.send_command(API_CMD_OFF, {"dst": self._addr})
+        await self.coordinator.send_command(API_CMD_SET, {"dst": self._addr, "on": False})
         self._on = False
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()

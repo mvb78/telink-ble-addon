@@ -1,6 +1,13 @@
 # Changelog
 
 ## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
+- **Combined `POST /api/command/set`**: on/off + brightness + colour temperature
+  in ONE call — a group turn_on with brightness+CT went from ~1.2 s (3 HTTP
+  round-trips) to ~0.65 s (measured live).
+- **Optimistic state**: lamp and group entities write assumed state immediately
+  after a command (corrected on the next poll), so HA responds instantly.
+- **Correct on/off**: lamps now report `off` when brightness is 0 (these lamps
+  always report `state:"ON"`; "off" = brightness 0) — matches the web UI fix.
 - **Permanent connections** (the old CLI's fast model): `TELINK_IDLE_TIMEOUT=0`
   disables the idle-release sweeper (`deploy_sidecar.sh` now sets it); the
   health-check keepalive keeps sessions alive and detects dead links.

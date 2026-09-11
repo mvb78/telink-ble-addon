@@ -734,6 +734,40 @@ def api_colortemp():
     return _cmd(0xE2, bytes([0x05, 100 - v]), data, dst=data.get("dst"))
 
 
+@app.route("/api/command/set", methods=["POST"])
+def api_set():
+    """Apply a lamp/group state in ONE call: optional on/off + brightness + colortemp.
+
+    Body: {mac | dst, on?: bool, brightness?: 0-100, colortemp?: 0-100 warm%}
+    Sends the needed mesh commands back-to-back (daemon-first), so a turn_on
+    with brightness + colour temperature is a single HTTP round-trip instead of
+    three.
+    """
+    data = request.get_json(silent=True) or {}
+    if not data.get("mac") and "dst" not in data:
+        return jsonify({"ok": False, "msg": "mac or dst required"}), 400
+    cmds = []
+    if "on" in data:
+        cmds.append((0xD0, bytes([1 if data["on"] else 0])))
+    bri = data.get("brightness")
+    if bri is not None:
+        cmds.append((0xD2, bytes([max(0, min(100, int(bri)))])))
+    ct = data.get("colortemp")
+    if ct is not None:
+        cmds.append((0xE2, bytes([0x05, 100 - max(0, min(100, int(ct)))])))
+    if not cmds:
+        return jsonify({"ok": False, "msg": "nothing to set (on/brightness/colortemp)"}), 400
+    ok = True
+    results = []
+    for opcode, params in cmds:
+        ok, msg = _run_async(_execute(opcode, params, _get_targets(data),
+                                      dst=data.get("dst"), mac=data.get("mac")))
+        results.append(msg)
+        if not ok:
+            break
+    return jsonify({"ok": ok, "msg": f"{len(cmds)} command(s)", "results": results})
+
+
 @app.route("/api/command/rgb", methods=["POST"])
 def api_rgb():
     data = request.get_json() or {}
