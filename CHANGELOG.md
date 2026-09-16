@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.3.1 - 2026-09-15 (verified sends, integration retry)
+- Daemon: liveness-verified command sends — every mesh send is now proven by
+  a GATT read of the status characteristic; on failure the session reconnects
+  and re-sends within the same call (2 cycles) instead of silently dropping
+  packets. Root cause of the "lamps don't switch on in the morning" class:
+  write-without-response never raises on a dead link, so packets vanished
+  without any error reaching HA.
+- Daemon: keepalive-loop/query/read_status reconnects no longer spawn
+  duplicate keepalive tasks (`_reconnect` gained a `spawn_keepalive` switch);
+  `send()` re-arms the keepalive task itself.
+- Integration 1.0.4: failed commands retry 3× (2 s apart) and raise
+  `HomeAssistantError` on final failure instead of returning a bool that
+  nobody checked — automations and UI taps now surface visible failures.
+- Live-verified on HA: daemon 1.3.1 with 4/4 lamps connected, verified
+  on/off round-trip through the HA service call.
+
 ## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
 - Permanent connections (`TELINK_IDLE_TIMEOUT=0`) + health-check keepalive that
   detects dead links; fast event-driven reconnect (~0.25 s instead of 5-30 s).

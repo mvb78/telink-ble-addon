@@ -52,6 +52,14 @@ _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
 # model). Sessions reconnect on demand.
 IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 
+# Verify every send with a GATT read of the status characteristic: command
+# writes use write-without-response (response=False), which never raises even
+# when the lamp dropped the link — that caused silent morning failures (packets
+# into the void, no error surfaced to callers). The read proves the ATT bearer
+# is alive; on failure we reconnect and re-send within the same command call.
+_LINK_VERIFY_TIMEOUT = float(os.environ.get("TELINK_LINK_VERIFY_TIMEOUT", "8"))
+_SEND_ATTEMPTS = 2  # reconnect cycles allowed within one send()
+
 
 class DaemonSession:
     def __init__(self, lamp: dict):
@@ -83,25 +91,61 @@ class DaemonSession:
         except Exception:
             pass
 
+    async def _read_status_char(self):
+        """Live-link proof: plain GATT read of the status characteristic.
+
+        Raises on any transport failure (dead/gone lamp, stale connection).
+        Must be called while holding the session lock to avoid overlapping
+        with command/query traffic.
+        """
+        return await asyncio.wait_for(
+            self.ctrl.client.read_gatt_char(CHAR_STATUS_UUID),
+            timeout=_LINK_VERIFY_TIMEOUT,
+        )
+
     async def send(self, opcode: int, params: bytes, address: int):
+        """Send a mesh command with link verification and bounded reconnect.
+
+        Writes alone can't prove delivery (write-without-response swallows
+        dead links), so after sending we do a status-char read. On failure
+        (send or read) we reconnect and retry, up to _SEND_ATTEMPTS cycles.
+        Raises on final failure so callers see ok=false instead of silence.
+        """
         async with self._lock:
-            if not self.ctrl.client or not self.ctrl.client.is_connected:
-                await self._reconnect()
-            try:
-                await self.ctrl.send_command(opcode, params, address)
-                await asyncio.sleep(0.2)
-                await self.ctrl.send_command(opcode, params, address)
-            except Exception:
-                await self._reconnect()
-                await self.ctrl.send_command(opcode, params, address)
-                await asyncio.sleep(0.2)
-                await self.ctrl.send_command(opcode, params, address)
-            self._last_cmd_time = asyncio.get_event_loop().time()
-            try:
-                registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
-                self.lamp["last_seq"] = self.ctrl.seq_manager.seq
-            except Exception:
-                pass
+            last_error: Exception | None = None
+            for attempt in range(1, _SEND_ATTEMPTS + 1):
+                try:
+                    if not self.ctrl.client or not self.ctrl.client.is_connected:
+                        await self._reconnect(spawn_keepalive=False)
+                    if self._keepalive_task is None or self._keepalive_task.done():
+                        self._keepalive_task = asyncio.get_event_loop().create_task(
+                            self._keepalive_loop()
+                        )
+                    await self.ctrl.send_command(opcode, params, address)
+                    await asyncio.sleep(0.2)
+                    await self.ctrl.send_command(opcode, params, address)
+                    await self._read_status_char()  # liveness proof
+                    self._last_cmd_time = asyncio.get_event_loop().time()
+                    try:
+                        registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
+                        self.lamp["last_seq"] = self.ctrl.seq_manager.seq
+                    except Exception:
+                        pass
+                    return
+                except Exception as err:
+                    last_error = err
+                    if attempt < _SEND_ATTEMPTS:
+                        try:
+                            # drop the dead link first so _reconnect rebuilds
+                            try:
+                                await self.ctrl.disconnect()
+                            except Exception:
+                                pass
+                            await self._reconnect(spawn_keepalive=False)
+                        except Exception as reconnect_error:
+                            last_error = reconnect_error
+            assert last_error is not None
+            raise last_error
 
     async def drain(self, duration: float = 0.5):
         """Clear stale notifications from this session's queue without acting on them."""
@@ -115,7 +159,7 @@ class DaemonSession:
         """Send a query command over this session and return the matching decrypted response."""
         async with self._lock:
             if not self.ctrl.client or not self.ctrl.client.is_connected:
-                await self._reconnect()
+                await self._reconnect(spawn_keepalive=False)
             # Drop queued/stale notifications so we only read fresh responses.
             await self.ctrl.drain_notifications(duration=0.2)
             try:
@@ -123,7 +167,7 @@ class DaemonSession:
                 await asyncio.sleep(0.15)
                 await self.ctrl.send_command(opcode, params, 0xFFFF)
             except Exception:
-                await self._reconnect()
+                await self._reconnect(spawn_keepalive=False)
                 await self.ctrl.send_command(opcode, params, 0xFFFF)
                 await asyncio.sleep(0.15)
                 await self.ctrl.send_command(opcode, params, 0xFFFF)
@@ -140,12 +184,12 @@ class DaemonSession:
         """
         async with self._lock:
             if not self.ctrl.client or not self.ctrl.client.is_connected:
-                await self._reconnect()
+                await self._reconnect(spawn_keepalive=False)
             data = await self.ctrl.client.read_gatt_char(CHAR_STATUS_UUID)
             self._last_cmd_time = asyncio.get_event_loop().time()
             return bytes(data)
 
-    async def _reconnect(self):
+    async def _reconnect(self, spawn_keepalive: bool = True):
         saved_seq = self.ctrl.seq_manager
         try:
             await self.ctrl.disconnect()
@@ -161,9 +205,10 @@ class DaemonSession:
         await self.ctrl.connect()
         await self.ctrl.login()
         self._last_cmd_time = asyncio.get_event_loop().time()
-        self._keepalive_task = asyncio.get_event_loop().create_task(
-            self._keepalive_loop()
-        )
+        if spawn_keepalive:
+            self._keepalive_task = asyncio.get_event_loop().create_task(
+                self._keepalive_loop()
+            )
         print(f"  [{self.lamp['name']}] reconnected", flush=True)
 
     async def _keepalive_loop(self):
@@ -177,7 +222,7 @@ class DaemonSession:
             try:
                 async with self._lock:
                     if not self.ctrl.client or not self.ctrl.client.is_connected:
-                        await self._reconnect()
+                        await self._reconnect(spawn_keepalive=False)
                         continue
                     await self.ctrl.send_command(0xDA, _STATUS_PARAMS, 0xFFFF)
                     # Health check: the lamp pushes its own 0xDB on the keepalive.

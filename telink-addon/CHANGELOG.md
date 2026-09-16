@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1 - 2026-09-15 (verified sends)
+- **Liveness-verified sends**: every mesh command is confirmed by a status-char
+  GATT read; failure triggers reconnect + resend (up to 2 cycles) and surfaces
+  as an error to the caller instead of silent packet loss. This closes the
+  "morning dead link" gap the health-check keepalive could only detect a full
+  interval later: a command racing a dead session now recovers inside the
+  same HTTP call.
+- Reconnect housekeeping: keepalive-loop, query and read_status paths no
+  longer spawn duplicate keepalive tasks.
+
 ## 1.3.0 - 2026-09-11 (speed & reliability, live-verified on HA)
 - **Combined `POST /api/command/set`**: on/off + brightness + colour temperature
   in ONE call — a group turn_on with brightness+CT went from ~1.2 s (3 HTTP

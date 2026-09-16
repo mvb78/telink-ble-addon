@@ -19,8 +19,8 @@ from datetime import timedelta
 from typing import Any
 
 import aiohttp
-
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -89,8 +89,29 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return results if isinstance(results, list) else []
 
     async def send_command(self, path: str, payload: dict) -> bool:
-        data = await self._request("POST", path, json=payload, total=20)
-        return isinstance(data, dict) and bool(data.get("ok"))
+        # The sidecar daemon may briefly be mid-reconnect; retry failures a
+        # couple of times before surfacing the error. Timed-out requests are
+        # not retried to avoid double mesh bursts, and "ok": false responses
+        # are retried as well since the daemon's own verified send can be
+        # racing a keepalive-triggered reconnect.
+        last: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                data = await self._request("POST", path, json=payload, total=90)
+            except UpdateFailed as err:
+                last = err
+                _LOGGER.warning("Telink command %s failed (attempt %d/3): %s",
+                                path, attempt, last)
+            else:
+                if isinstance(data, dict) and data.get("ok"):
+                    return True
+                msg = data.get("msg") if isinstance(data, dict) else "invalid add-on response"
+                last = HomeAssistantError(f"Add-on rejected {path}: {msg}")
+                _LOGGER.warning("Telink command %s rejected (attempt %d/3): %s",
+                                path, attempt, msg)
+            if attempt < 3:
+                await asyncio.sleep(2)
+        raise HomeAssistantError(f"Telink command {path} failed after 3 attempts: {last}") from last
 
     # -- coordinator ---------------------------------------------------------
     async def _async_update_data(self) -> dict[str, Any]:
