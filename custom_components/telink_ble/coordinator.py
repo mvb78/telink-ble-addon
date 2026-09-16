@@ -60,13 +60,13 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     # -- low-level requests -------------------------------------------------
     async def _request(
-        self, method: str, path: str, json: dict | None = None, total: float = 20
+        self, method: str, path: str, payload: dict | None = None, total: float = 20
     ) -> Any:
         url = f"{self._base_url}{path}"
         timeout = aiohttp.ClientTimeout(total=total)
         try:
             async with self._session.request(
-                method, url, json=json, timeout=timeout
+                method, url, json=payload, timeout=timeout
             ) as resp:
                 resp.raise_for_status()
                 return await resp.json()
@@ -74,10 +74,13 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             raise UpdateFailed(f"Add-on request failed for {path}: {err}") from err
         except asyncio.TimeoutError as err:
             raise UpdateFailed(f"Add-on request timed out for {path}") from err
-        except (ValueError, json.JSONDecodeError) as err:
+        except ValueError as err:
             # non-JSON body (add-on restarting, error page, empty) — treat as
             # UpdateFailed so a single bad poll can never wedge the coordinator
-            # and leave every entity stuck "unavailable".
+            # and leave every entity stuck "unavailable". (JSONDecodeError is a
+            # ValueError; the old `json.JSONDecodeError` tuple element crashed
+            # AttributeError during HA shutdown because the `json` payload
+            # parameter shadowed the module name here.)
             raise UpdateFailed(f"Add-on returned non-JSON for {path}") from err
 
     async def get_lamps(self) -> list[dict]:
@@ -89,7 +92,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return data if isinstance(data, list) else []
 
     async def get_status_all(self) -> list[dict]:
-        data = await self._request("POST", API_STATUS_ALL, json={}, total=75)
+        data = await self._request("POST", API_STATUS_ALL, payload={}, total=75)
         results = data.get("results") if isinstance(data, dict) else []
         return results if isinstance(results, list) else []
 
@@ -102,7 +105,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         last: Exception | None = None
         for attempt in range(1, 4):
             try:
-                data = await self._request("POST", path, json=payload, total=90)
+                data = await self._request("POST", path, payload=payload, total=90)
             except UpdateFailed as err:
                 last = err
                 _LOGGER.warning("Telink command %s failed (attempt %d/3): %s",
