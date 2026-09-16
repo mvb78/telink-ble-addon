@@ -50,9 +50,9 @@ jobs:
           context: ./telink-addon
           platforms: linux/amd64,linux/arm64
           push: true
+          # Hardcoded to match telink-addon/config.yaml `image:` — the
+          # Supervisor pulls ghcr.io/mvb78/telink-ble-cli:<version>.
           tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ steps.version.outputs.version }}
-            ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
+            ghcr.io/mvb78/telink-ble-cli:${{ steps.version.outputs.version }}
+            ghcr.io/mvb78/telink-ble-cli:latest
           labels: io.hass.version=${{ steps.version.outputs.version }}
-        env:
-          IO_HASS_VERSION: ${{ steps.version.outputs.version }}
