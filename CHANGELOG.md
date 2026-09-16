@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.1 - 2026-09-16 (sequence-number desync self-heal)
+- Daemon: when a lamp's own status push carries a mesh seq number ahead of
+  ours (after phone-app usage or a mesh re-key), the session's sequence
+  counter jumps past it immediately — sends can never again be silently
+  dropped by the ±0x3F dedup window. The jump persists like a normal send.
+- Docs: README gains the "Bluetooth adapter requirements" section —
+  exclusive adapter or a second dongle (HA's own Bluetooth scanner disabled,
+  phone apps must disconnect).
+
 ## 1.4.0 - 2026-09-16 (lamp responses — evented state)
 - Daemon: state cache from the lamps' own `0xDB` status pushes. Every mesh
   write (incl. group broadcasts) triggers a push through each lamp's session;

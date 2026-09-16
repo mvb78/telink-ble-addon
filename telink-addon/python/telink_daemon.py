@@ -26,7 +26,7 @@ import sys
 import time
 
 import lamp_registry as registry
-from telink_ble import TelinkController
+from telink_ble import TelinkController, SequenceManager
 from config import CHAR_STATUS_UUID
 
 SOCK_PATH = "/tmp/telink-ble.sock"
@@ -77,13 +77,41 @@ class DaemonSession:
         self._lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
 
-    def note_plain(self, plain: bytes):
-        """Decode a lamp's 0xDB status push and refresh the state cache."""
+    def note_plain(self, plain: bytes, raw: bytes | None = None):
+        """Decode a lamp's status push into the state cache + seq-sync.
+
+        The lamp broadcasts its state after every mesh write. Two frame
+        formats arrive here:
+          * vendor 0x0211 (20 B, op at [7] = 0xDB) — the lamp's own direct
+            GATT push on this session; its leading 3 bytes are the mesh
+            sequence number the lamp just used/heeded,
+          * mesh-layer frames (decrypted payload starts with op|0xC0) —
+            relays of OTHER lamps; not attributable per-session, skipped.
+        """
         if len(plain) < 20 or plain[7] != 0xDB:
-            return  # vendor status frame only (direct GATT notify path)
+            return
         p = plain[10:]
         if len(p) < 7:
             return
+
+        if raw is not None and len(raw) >= 3:
+            seen_seq = int.from_bytes(raw[0:3], "little")
+            ours = self.ctrl.seq_manager.seq
+            if seen_seq > ours:
+                # Lamps can advance their seq independently (phone app in the
+                # mesh, mesh re-key after app control). Our next sends would
+                # be silently dropped as "already seen" (dedup window ±0x3F)
+                # — jump ahead of the lamp's counter at once.
+                self.ctrl.seq_manager = SequenceManager(initial=seen_seq)
+                try:
+                    registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
+                    self.lamp["last_seq"] = self.ctrl.seq_manager.seq
+                except Exception:
+                    pass
+                if os.environ.get("TELINK_DEBUG_STATE"):
+                    print(f"  [{self.lamp.get('name', self.lamp['mac'])}] seq "
+                          f"{ours} -> {self.ctrl.seq_manager.seq} (lamp ahead)", flush=True)
+
         bri = p[6]
         rgb = [p[7], p[8], p[9]] if len(p) >= 10 else None
         entry = {

@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1 - 2026-09-16 (sequence-number desync self-heal)
+- Liveness-verified sends now also self-heal sequence number desync:
+  when a lamp's own push shows a mesh seq ahead of ours, the session's
+  counter jumps past it (persisted), so later mesh writes cannot be
+  dropped by the ±0x3F dedup window.
+- Docs: README notes the Bluetooth adapter exclusivity / 2nd dongle.
+
 ## 1.4.0 - 2026-09-16 (lamp responses — evented state)
 - **Per-lamp state cache**: the daemon decodes each lamp's `0xDB` status push
   (fired after every mesh write, including group broadcasts) into a

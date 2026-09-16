@@ -62,3 +62,22 @@ def test_byte_clustered_no_raise_short_frame():
     s = make_session()
     s.note_plain(bytes(10))                          # no op, no payload
     assert s.state_cache is None
+
+
+def test_seq_jumps_forward_when_lamp_is_ahead():
+    s = make_session()
+    ours_before = s.ctrl.seq_manager.seq
+    assert ours_before == 0x1000                    # default SequenceManager start
+    frame = status_frame()
+    head = bytearray(0x5000.to_bytes(3, "little")) + bytes(7)  # lamp used 0x5000
+    raw = bytes(head) + frame[10:]
+    s.note_plain(bytes(frame), raw)
+    assert s.ctrl.seq_manager.seq > ours_before      # jumped past the lamp
+
+
+def test_seq_never_rewinds():
+    s = make_session()
+    s.note_plain(status_frame(), raw=(0x5000).to_bytes(3, "little") + status_frame()[:17])
+    ahead = s.ctrl.seq_manager.seq
+    s.note_plain(status_frame(), raw=(0x0005).to_bytes(3, "little") + status_frame()[:17])
+    assert s.ctrl.seq_manager.seq == ahead

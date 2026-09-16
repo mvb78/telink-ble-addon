@@ -196,7 +196,8 @@ class TelinkController:
         self.client = None
         self.seq_manager = SequenceManager(initial=initial_seq)
         # Optional callback for decrypted notification frames (daemon state
-        # cache). Receives every successfully decrypted plaintext frame.
+        # cache). First arg: decrypted plaintext frame; optional second arg:
+        # the raw ATT notify value as received (sno/src header preserved).
         self.on_plain = on_plain
         self.session_key = None
         self._notify_queue: asyncio.Queue = asyncio.Queue()
@@ -338,7 +339,7 @@ class TelinkController:
                                 plain = decrypt_notification_auto(self.session_key, raw_notify[:20], self.mac_bytes)
                             if plain:
                                 if self.on_plain:
-                                    self.on_plain(plain)
+                                    self.on_plain(plain, raw_notify)
                                 self._notify_queue.put_nowait(plain)
             buf = buf[pos:]
 
@@ -355,7 +356,7 @@ class TelinkController:
                 plain = decrypt_notification_auto(self.session_key, raw[:20], self.mac_bytes)
             if plain:
                 if self.on_plain:
-                    self.on_plain(plain)
+                    self.on_plain(plain, raw)
                 self._notify_queue.put_nowait(plain)
 
     async def login(self):
