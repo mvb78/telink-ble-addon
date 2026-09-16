@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.4.0 - 2026-09-16 (lamp responses — evented state)
+- **Per-lamp state cache**: the daemon decodes each lamp's `0xDB` status push
+  (fired after every mesh write, including group broadcasts) into a
+  timestamped cache; the lamps ARE the source of truth now.
+- **`kind: state` TCP request**: memory-cache snapshot for consumers
+  (HA integration polls it directly on 8097 — no BLE traffic, sub-ms reads).
+- Mesh group state is composed from the member lamps' caches (OR over
+  `brightness>0`, matching the 1.3.0 correct-off rule).
+
 ## 1.3.1 - 2026-09-15 (verified sends)
 - **Liveness-verified sends**: every mesh command is confirmed by a status-char
   GATT read; failure triggers reconnect + resend (up to 2 cycles) and surfaces

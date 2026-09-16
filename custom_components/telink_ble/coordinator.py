@@ -13,10 +13,12 @@ so one HTTP request per poll refresh covers every entity.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from datetime import timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 from homeassistant.core import HomeAssistant
@@ -28,6 +30,8 @@ from .const import (
     API_GROUPS,
     API_LAMPS,
     API_STATUS_ALL,
+    DAEMON_STATE_TIMEOUT,
+    DEFAULT_DAEMON_PORT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
 )
@@ -43,7 +47,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Poll lamps, groups and their combined status from the add-on."""
 
     def __init__(self, hass: HomeAssistant, base_url: str, poll_interval: int,
-                 session: aiohttp.ClientSession):
+                 session: aiohttp.ClientSession, daemon_port: int | None = None):
         super().__init__(
             hass,
             _LOGGER,
@@ -52,6 +56,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._base_url = base_url.rstrip("/")
         self._session = session
+        self._daemon_port = daemon_port or DEFAULT_DAEMON_PORT
 
     # -- low-level requests -------------------------------------------------
     async def _request(
@@ -114,6 +119,42 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         raise HomeAssistantError(f"Telink command {path} failed after 3 attempts: {last}") from last
 
     # -- coordinator ---------------------------------------------------------
+    async def _fetch_daemon_state(self) -> dict[str, Any] | None:
+        """Read the sidecar daemon's evented state cache over raw TCP.
+
+        The daemon keeps each lamp's last-decoded 0xDB status push (the lamp
+        notifies after every mesh write, incl. group broadcasts), so this read
+        is a cheap in-memory snapshot without any BLE interaction. Returns
+        None when the socket is unavailable — the coordinator gracefully
+        falls back to the slower /api/command/status polling path.
+        """
+        parsed = urlparse(self._base_url)
+        host = parsed.hostname
+        if not host:
+            return None
+        port = self._daemon_port or DEFAULT_DAEMON_PORT
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(host, port), timeout=2.0
+            )
+        except (OSError, asyncio.TimeoutError) as err:
+            _LOGGER.debug("Telink daemon TCP %s:%s unreachable: %s", host, port, err)
+            return None
+        try:
+            writer.write(json.dumps({"kind": "state"}).encode() + b"\n")
+            await writer.drain()
+            line = await asyncio.wait_for(reader.readline(), timeout=DAEMON_STATE_TIMEOUT)
+            resp = json.loads(line.decode())
+        except (OSError, asyncio.TimeoutError, ValueError) as err:
+            _LOGGER.debug("Telink daemon state read failed: %s", err)
+            return None
+        finally:
+            with contextlib.suppress(Exception):
+                writer.close()
+        if resp.get("status") == "ok":
+            return resp.get("state") or {}
+        return None
+
     async def _async_update_data(self) -> dict[str, Any]:
         # Individual add-on endpoints may fail (or hang) when the Telink lamps
         # are asleep / not advertising. Rather than fail the whole update (which
@@ -124,6 +165,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         groups = (self.data or {}).get("groups", [])
         connected = (self.data or {}).get("connected", False)
         by_mac: dict[str, dict] = {}
+        cached_state = (self.data or {}).get("cached_state") or {}
 
         async def _fetch_lamps():
             nonlocal lamps
@@ -158,11 +200,43 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             except UpdateFailed:
                 _LOGGER.debug("Telink daemon liveness check failed; keeping last-known")
 
-        await asyncio.gather(_fetch_lamps(), _fetch_groups(), _fetch_status(), _fetch_daemon())
+        async def _fetch_state():
+            nonlocal cached_state
+            try:
+                fresh = await self._fetch_daemon_state()
+                if fresh:
+                    cached_state = {k.lower(): v for k, v in fresh.items()}
+            except Exception:  # noqa: BLE001 — state cache is best-effort
+                _LOGGER.debug("Telink daemon state fetch failed; keeping last-known")
+
+        await asyncio.gather(_fetch_lamps(), _fetch_groups(), _fetch_status(),
+                             _fetch_daemon(), _fetch_state())
+
+        # Compose group truth: a mesh group has no read-back, but every member
+        # lamp pushes its 0xDB status through its own session, so the OR over
+        # known members is the real group state.
+        group_states: dict[int, dict] = {}
+        for group in groups or []:
+            addr = group.get("address")
+            if not addr:
+                continue
+            members = {str(m).upper() for m in (group.get("lamps") or [])}
+            known = [cached_state[m.lower()]
+                     for m in members if m.lower() in cached_state]
+            if known and not all(s.get("unknown") for s in known):
+                on_members = [s for s in known if not s.get("unknown")]
+                group_states[addr] = {
+                    "on": any(s.get("on") for s in on_members),
+                    "brightness": max((s.get("brightness") or 0) for s in on_members),
+                    "unknown_mask": [m for m in members
+                                     if m.lower() not in cached_state],
+                }
 
         return {
             "lamps": lamps,
             "groups": groups,
             "status": by_mac,
             "connected": connected,
+            "cached_state": cached_state,
+            "group_states": group_states,
         }

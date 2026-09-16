@@ -35,3 +35,8 @@ VAL_MAX = 100
 
 CONF_HOST = CONF_HOST
 CONF_PORT = CONF_PORT
+
+# Sidecar daemon (Variant B): direct TCP JSON protocol on 0.0.0.0:8097, used
+# for cheap evented state reads (kind=state) that bypass the add-on's web app.
+DEFAULT_DAEMON_PORT = 8097
+DAEMON_STATE_TIMEOUT = 3.0

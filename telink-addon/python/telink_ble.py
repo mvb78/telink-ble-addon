@@ -187,13 +187,17 @@ class AddrConfirmWatcher:
 
 
 class TelinkController:
-    def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None):
+    def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None,
+                 on_plain=None):
         self.mac = mac.upper()
         self.name = name
         self.password = password
         self.mac_bytes = bytes.fromhex(mac.replace(":", ""))
         self.client = None
         self.seq_manager = SequenceManager(initial=initial_seq)
+        # Optional callback for decrypted notification frames (daemon state
+        # cache). Receives every successfully decrypted plaintext frame.
+        self.on_plain = on_plain
         self.session_key = None
         self._notify_queue: asyncio.Queue = asyncio.Queue()
         self._monitor_task: asyncio.Task | None = None
@@ -333,6 +337,8 @@ class TelinkController:
                                 # last try vendor auto
                                 plain = decrypt_notification_auto(self.session_key, raw_notify[:20], self.mac_bytes)
                             if plain:
+                                if self.on_plain:
+                                    self.on_plain(plain)
                                 self._notify_queue.put_nowait(plain)
             buf = buf[pos:]
 
@@ -348,6 +354,8 @@ class TelinkController:
             if not plain and len(raw) >= 20:
                 plain = decrypt_notification_auto(self.session_key, raw[:20], self.mac_bytes)
             if plain:
+                if self.on_plain:
+                    self.on_plain(plain)
                 self._notify_queue.put_nowait(plain)
 
     async def login(self):

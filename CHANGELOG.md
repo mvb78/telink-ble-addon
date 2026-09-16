@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.0 - 2026-09-16 (lamp responses — evented state)
+- Daemon: state cache from the lamps' own `0xDB` status pushes. Every mesh
+  write (incl. group broadcasts) triggers a push through each lamp's session;
+  the daemon decodes it (`brightness>0` = on, matching the 1.3.0 correct-off
+  semantics) and keeps a timestamped per-lamp cache. No BLE interaction on
+  reads.
+- Daemon TCP protocol: `{"kind": "state"}` request → snapshot of all
+  lamp states (`{mac: {on, brightness, colortemp warm%, rgb, ts, name}}`).
+- Integration 1.1.0: polls the daemon directly over TCP 8097 (bypassing the
+  add-on web app's Flask layer) with graceful fallback to the status-query
+  path; mesh **group entities now show real composed state** (OR over known
+  members, matching the group-registry membership) instead of assumed state —
+  correct after restarts and reflecting group broadcasts.
+- lamp push semantics + TCP state protocol unit-tested
+  (tests/test_state_cache.py, 5 cases); full suite 30/30 green.
+
 ## 1.3.1 - 2026-09-15 (verified sends, integration retry)
 - Daemon: liveness-verified command sends — every mesh send is now proven by
   a GATT read of the status characteristic; on failure the session reconnects

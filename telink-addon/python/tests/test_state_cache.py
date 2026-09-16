@@ -1,0 +1,64 @@
+"""
+Unit tests for the 0x01 state-cache (liveness push parser) — Phase 1.
+
+Run from telink-addon/python/:
+    python3 -m pytest tests/test_state_cache.py -v
+
+No BLE hardware needed — builds synthetic 0x1B->0x11 status frames following
+the vendor layout documented in docs/telink-ble.md §5.1 (op at [7]=0xDB,
+payload p = pkt[10:]: p[3]=ct_hw, p[5]=on flag, p[6]=bright, p[7:10]=RGB).
+"""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from telink_daemon import DaemonSession
+
+
+def make_session() -> DaemonSession:
+    return DaemonSession({"mac": "AA:BB:CC:DD:EE:FF", "name": "L1", "password": "0000"})
+
+
+def status_frame(on: int = 1, bri: int = 50, ct_hw: int = 0, rgb=(0, 0, 0)) -> bytes:
+    head = bytes(7) + bytes([0xDB]) + bytes(2)          # pkt[7] = 0xDB, p at pkt[10]
+    payload = bytes([0x10, 0, 0, ct_hw, 0, on, bri,
+                     rgb[0], rgb[1], rgb[2]]) + bytes(10)
+    return head + payload
+
+
+def test_vendor_status_on():
+    s = make_session()
+    s.note_plain(status_frame(on=1, bri=50, ct_hw=0))
+    assert s.state_cache == {**s.state_cache, "on": True, "brightness": 50,
+                             "colortemp": 100, "rgb": [0, 0, 0]}
+    assert isinstance(s.state_cache["ts"], float)
+
+
+def test_bri_zero_is_off():
+    s = make_session()
+    s.note_plain(status_frame(on=1, bri=0))
+    assert s.state_cache["on"] is False
+    assert s.state_cache["brightness"] == 0
+
+
+def test_duplicate_push_is_noop():
+    s = make_session()
+    s.note_plain(status_frame())
+    first = dict(s.state_cache)
+    s.note_plain(status_frame())                     # identical semantic payload
+    assert s.state_cache["on"] == first["on"]
+    assert s.state_cache["brightness"] == first["brightness"]
+
+
+def test_mesh_layer_frame_ignored():
+    s = make_session()
+    s.note_plain(bytes([0xDB, 0x11]) + bytes(6))     # mesh 0x1B payload (starts with op)
+    assert s.state_cache is None                     # only vendor frames cached
+
+
+def test_byte_clustered_no_raise_short_frame():
+    s = make_session()
+    s.note_plain(bytes(10))                          # no op, no payload
+    assert s.state_cache is None

@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import sys
+import time
 
 import lamp_registry as registry
 from telink_ble import TelinkController
@@ -65,10 +66,40 @@ class DaemonSession:
     def __init__(self, lamp: dict):
         self.lamp = lamp
         self.ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
-                                     initial_seq=lamp.get("last_seq"))
+                                     initial_seq=lamp.get("last_seq"),
+                                     on_plain=self.note_plain)
         self._last_cmd_time: float = 0.0
+        # Last known lamp state from the lamp's own 0xDB status pushes (the
+        # lamp notifies after every mesh write, incl. group broadcasts fed in
+        # via other proxies). Semantics per lamp_registryś 1.3.0 fix: a lamp
+        # always reports state ON; real off = brightness 0.
+        self.state_cache: dict | None = None
         self._lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
+
+    def note_plain(self, plain: bytes):
+        """Decode a lamp's 0xDB status push and refresh the state cache."""
+        if len(plain) < 20 or plain[7] != 0xDB:
+            return  # vendor status frame only (direct GATT notify path)
+        p = plain[10:]
+        if len(p) < 7:
+            return
+        bri = p[6]
+        rgb = [p[7], p[8], p[9]] if len(p) >= 10 else None
+        entry = {
+            "on": bool(p[5]) and bri > 0,
+            "brightness": bri,
+            "colortemp": max(0, min(100, 100 - p[3])),  # warm%
+            "rgb": rgb,
+        }
+        entry["ts"] = round(time.time(), 3)
+        old = self.state_cache
+        if old and {k: v for k, v in old.items() if k != "ts"} == entry:
+            return
+        self.state_cache = entry
+        if os.environ.get("TELINK_DEBUG_STATE"):
+            print(f"  [{self.lamp.get('name', self.lamp['mac'])}] state -> "
+                  f"{'on' if entry['on'] else 'off'} bri={bri}", flush=True)
 
     async def start(self):
         await self.ctrl.connect()
@@ -298,7 +329,20 @@ async def _handle_client(
         mac = req.get("mac")
         targets = _resolve_targets(sessions, selector, mac)
 
-        if not targets:
+        if req.get("kind") == "state":
+            # Snapshot of the last-known lamp states from 0xDB status pushes.
+            # No BLE interaction — serves the HA integration's fast polling.
+            state = {}
+            for mac, sess in sessions.items():
+                if sess.state_cache:
+                    state[mac] = {
+                        **sess.state_cache,
+                        "name": sess.lamp.get("name", mac),
+                    }
+                else:
+                    state[mac] = {"name": sess.lamp.get("name", mac), "unknown": True}
+            resp = {"status": "ok", "state": state, "ts": time.time()}
+        elif not targets:
             resp = {"status": "error", "msg": "no matching lamps"}
         elif req.get("kind") == "read":
             # GATT read of the status characteristic over the live session.

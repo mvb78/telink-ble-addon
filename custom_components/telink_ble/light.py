@@ -202,10 +202,11 @@ class TelinkLampLight(_TelinkBaseLight):
 class TelinkGroupLight(_TelinkBaseLight):
     """A mesh group, controlled via a single packet to the group address.
 
-    The mesh does not expose group state, so this is an assumed-state entity.
+    The mesh does not expose read-back for group addresses, but every member
+    lamp pushes its 0xDB status through its own daemon session — the
+    coordinator composes real group state from those caches. The entity is
+    only an assumed-state entity while no member state is known.
     """
-
-    _attr_assumed_state = True
 
     def __init__(self, coordinator: TelinkCoordinator, group: dict):
         super().__init__(coordinator, group)
@@ -218,16 +219,35 @@ class TelinkGroupLight(_TelinkBaseLight):
         self._color_temp_kelvin: int | None = None
 
     @property
+    def _group_state(self) -> dict | None:
+        data = self.coordinator.data or {}
+        return (data.get("group_states") or {}).get(self._addr)
+
+    @property
     def is_on(self) -> bool:
+        state = self._group_state
+        if state is not None:
+            return bool(state.get("on"))
         return self._on
 
     @property
     def brightness(self) -> int | None:
+        state = self._group_state
+        if state is not None and state.get("on"):
+            return brightness_val_to_ha(int(state.get("brightness") or 0))
+        if state is not None:
+            return 0
         return self._brightness
 
     @property
     def color_temp_kelvin(self) -> int | None:
         return self._color_temp_kelvin
+
+    @property
+    def assumed_state(self) -> bool:
+        # Real member truth available → drop the assumed-state marker so dashboards
+        # show authentic state after restarts; otherwise keep optimistic UX.
+        return self._group_state is None
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         payload: dict[str, Any] = {"dst": self._addr, "on": True}
@@ -252,5 +272,5 @@ class TelinkGroupLight(_TelinkBaseLight):
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """Group has no read-back; keep local assumed state only."""
+        """Coordinator refreshes bring real composed group state."""
         self.async_write_ha_state()
