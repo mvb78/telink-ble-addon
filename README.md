@@ -111,6 +111,28 @@ Then restart Home Assistant and add the integration as above.
   (`POST /api/command/status`).
 - Integration options: add-on host/port + poll interval (default 30 s, min 5 s).
 
+## Bluetooth adapter requirements (exclusive or 2nd adapter)
+
+The daemon keeps **permanent BLE connections** to every lamp (verified sends,
+health-check keepalive, push-driven state cache). For stable control the
+radio must be effectively **exclusive to the daemon**:
+
+- **Exclusive adapter is enough** — the daemon holds one connection per lamp
+  through the host's `hci0`; disable Home Assistant's own Bluetooth scanner
+  (Settings → Devices → *Realtek Bluetooth Radio* → disable) so its passive
+  scans don't compete for adapter airtime with lamp commands.
+- **A second USB dongle is the cleaner layout** if you also want HA's BLE
+  tracking (BLE sensors, BT proxies' partners etc.) running in parallel.
+- Anything else that connects to the lamps (the phone app or a second
+  central) must disconnect — each Telink lamp accepts only **one central
+  connection** at a time.
+- Lifecycle: `docker logs telink-daemon` shows every connect/reconnect; the
+  sidecar restarts automatically (`--restart unless-stopped`).
+
+> Rule of thumb: one mesh cluster per radio. Phones/apps keep sending the
+> same credentials — if the app is used anyway, close it afterwards or
+> `POST /api/command/kick` so the daemon regains its connection.
+
 ## Install guide
 
 See **[docs/INSTALL_HAOS.md](docs/INSTALL_HAOS.md)** for the full walkthrough.
