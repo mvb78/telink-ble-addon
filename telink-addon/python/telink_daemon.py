@@ -21,6 +21,7 @@ Protocol (one JSON line per request/response):
 import asyncio
 import json
 import os
+import resource
 import signal
 import sys
 import time
@@ -264,7 +265,11 @@ class DaemonSession:
         await self.ctrl.connect()
         await self.ctrl.login()
         self._last_cmd_time = asyncio.get_event_loop().time()
-        if spawn_keepalive:
+        if spawn_keepalive and (self._keepalive_task is None
+                                or self._keepalive_task.done()):
+            # never stack keepalive loops — a dead-still-running loop from a
+            # previous connection would duplicate health-check traffic and
+            # fights the current one (leaked fds, wedged transmits).
             self._keepalive_task = asyncio.get_event_loop().create_task(
                 self._keepalive_loop()
             )
@@ -598,7 +603,54 @@ async def _idle_sweeper(sessions: dict[str, DaemonSession], stop_event: asyncio.
                 await sess.stop()
 
 
+def _raise_nofile_limit():
+    """Lift the soft nofile limit to the hard one (docker default soft=1024).
+
+    The daemon is a long-lived multi-socket process (one HCI monitor + one
+    BLE connection per lamp, plus one API TCP connection per poll from HA).
+    A leak creeping over 1024 wedged the whole daemon SILENTLY for hours
+    (socket.accept() died with Errno 24 and the lamps simply "did nothing"
+    until a manual restart) — this makes an accidental limit hit impossible
+    to reach by mere drift and buys the watchdog time to act.
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        target = max(8192, min(hard, 65536))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(target, hard), hard))
+        print(f"nofile limit: {soft} -> {min(target, hard)} (hard {hard})", flush=True)
+    except Exception as err:
+        print(f"[warn] could not raise nofile limit: {err}", flush=True)
+
+
+_FD_WARN_THRESHOLD = 4096  # watchdog fatal above this (limit is 8192+)
+_FD_CHECK_INTERVAL = 60.0
+
+
+async def _fd_watchdog():
+    """Kill the process when file descriptors saturate.
+
+    A silent FD leak took the daemon down twice overnight (lamps 'not
+    working' at 04:00/08:00 until a manual HA restart). Failing to accept
+    new API connections wedges every consumer without a single visible
+    symptom. With this watchdog the failure mode becomes a ~10 s blip: the
+    container restarts itself via `restart: unless-stopped` and reconnects.
+    """
+    while True:
+        try:
+            count = len(os.listdir("/proc/self/fd"))
+            if count >= _FD_WARN_THRESHOLD:
+                print(f"FATAL: {count} open fds >= {_FD_WARN_THRESHOLD}; restarting process "
+                      f"(docker will revive it). Apologies — a leak wedged earlier runs.",
+                      flush=True)
+                sys.stdout.flush()
+                os._exit(2)
+        except Exception:
+            pass  # /proc unavailable in some containers — degrade silently
+        await asyncio.sleep(_FD_CHECK_INTERVAL)
+
+
 async def start_daemon():
+    _raise_nofile_limit()
     if os.path.exists(PAUSE_FILE):
         print("Daemon paused (flag present) — holding.", flush=True)
 
@@ -656,6 +708,7 @@ async def start_daemon():
     idle_sweeper = asyncio.get_event_loop().create_task(
         _idle_sweeper(sessions, stop_event)
     )
+    fd_watchdog = asyncio.get_event_loop().create_task(_fd_watchdog())
 
     async with server:
         await stop_event.wait()

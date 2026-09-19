@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.2 - 2026-09-19 (fd exhaustion self-heal — the 04:00/08:00 outage)
+- Daemon raises its own nofile soft limit to >=8192 at startup and runs an
+  fd watchdog (restart at >=4096 fds), ending two silent overnight wedges.
+- `_reconnect` no longer stacks duplicate keepalive tasks; log spam gated.
+
 ## 1.4.1 - 2026-09-16 (sequence-number desync self-heal)
 - Liveness-verified sends now also self-heal sequence number desync:
   when a lamp's own push shows a mesh seq ahead of ours, the session's

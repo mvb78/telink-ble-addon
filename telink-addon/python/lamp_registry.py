@@ -112,7 +112,11 @@ def save(lamps: list[dict]) -> None:
     canonical = [_normalize_entry(entry) for entry in lamps]
     with open(LAMPS_FILE, "w") as f:
         json.dump(canonical, f, indent=2)
-    print(f"Saved {len(canonical)} lamp(s) to {LAMPS_FILE}")
+    # Gated: update_seq() calls save() on every mesh send, which used to
+    # flood the log (2 lines/command × 4 lamps) and pushed real signals off
+    # screen; opt back in via TELINK_DEBUG_STATE.
+    if os.environ.get("TELINK_DEBUG_STATE"):
+        print(f"Saved {len(canonical)} lamp(s) to {LAMPS_FILE}")
 
 
 def upsert(lamps: list[dict], mac: str, name: str, password: str, mesh_address: int | None = None, last_seq: int | None = None) -> list[dict]:

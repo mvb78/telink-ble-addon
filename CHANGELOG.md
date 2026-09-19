@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.4.2 - 2026-09-19 (the 04:00/08:00 outage bug — fd exhaustion self-heal)
+- Root cause of "lamps dead last night 04:00 and again 08:00": the daemon
+  slowly leaked file descriptors (~14 h uptime) until the 1024-fd limit
+  killed `socket.accept()` with 95k Errno-24 errors — every consumer wedged
+  with no visible symptom.
+- Daemon now raises its own `nofile` soft limit to ≥8192 at startup and
+  runs an **fd watchdog**: at ≥4096 open fds it restarts the process
+  (`os._exit(2)` + docker `restart: unless-stopped`), turning any future
+  leak into a ~10 s blip instead of a dead morning.
+- `_reconnect` no longer stacks duplicated keepalive tasks across
+  reconnections.
+- `Saved N lamp(s)` log spam (2 lines per mesh send) gated behind
+  `TELINK_DEBUG_STATE`.
+- deploy_sidecar.sh passes `--ulimit nofile=8192:8192` as belt & braces.
+
 ## 1.4.1 - 2026-09-16 (sequence-number desync self-heal)
 - Daemon: when a lamp's own status push carries a mesh seq number ahead of
   ours (after phone-app usage or a mesh re-key), the session's sequence

@@ -5,10 +5,10 @@
 # which the add-on's own container can't open). It shares the add-on's /data
 # and the host D-Bus, and listens on TCP 0.0.0.0:8097 for the add-on to bridge.
 #
-# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.4.1)
+# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.4.2)
 set -euo pipefail
 
-TAG="${1:-1.4.1}"
+TAG="${1:-1.4.2}"
 IMAGE="ghcr.io/mvb78/telink-ble-cli:${TAG}"
 NAME="telink-daemon"
 ADDON_CT="app_c4c18bb5_telink_ble_cli"
@@ -31,6 +31,7 @@ fi
 echo "Starting sidecar $IMAGE ..."
 docker run -d --name "$NAME" \
   --privileged \
+  --ulimit nofile=8192:8192 \
   --network host \
   --restart unless-stopped \
   -v /run/dbus/system_bus_socket:/run/dbus/system_bus_socket \
