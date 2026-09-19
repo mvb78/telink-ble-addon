@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.5.0 - 2026-09-19 (group reliability — lab findings, 3+3 mesh)
+- **Discovery scan 45 s → 60 s** (default). Lab proved in-mesh Telink lamps
+  advertise ~15–20× slower than unprovisioned ones; 20–45 s scans miss them,
+  a 60 s scan reliably catches all 6.
+- **Group add/remove now unicast 0xD7 to the target lamp's own mesh address**
+  (previously broadcast). Lab-verified: the lamp learns its group membership
+  in firmware reliably only via the unicast path; broadcast delivery is
+  inconsistent across sessions.
+- **`_execute` relay fallback for ALL commands** (incl. pure broadcast group
+  set): try each provisioned (8888) candidate session in turn, so a single
+  dead/unreachable lamp session can no longer wedge the whole group command.
+  Previously a pure broadcast required every session to answer and fell into
+  slow direct-connect scans on any failure.
+- Integration 1.2.0 (version sync only; behavior unchanged).
+
 ## 1.4.2 - 2026-09-19 (the 04:00/08:00 outage bug — fd exhaustion self-heal)
 - Root cause of "lamps dead last night 04:00 and again 08:00": the daemon
   slowly leaked file descriptors (~14 h uptime) until the 1024-fd limit

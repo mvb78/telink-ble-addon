@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0 - 2026-09-19 (group reliability — lab findings)
+- Discovery scan default 45s -> 60s (in-mesh lamps advertise 15-20x slower).
+- Group add/remove unicast 0xD7 to the lamp's own mesh address (reliable
+  firmware membership, per lab); `_execute` falls back across candidate
+  relay sessions so one dead lamp can't wedge a group command.
+
 ## 1.4.2 - 2026-09-19 (fd exhaustion self-heal — the 04:00/08:00 outage)
 - Daemon raises its own nofile soft limit to >=8192 at startup and runs an
   fd watchdog (restart at >=4096 fds), ending two silent overnight wedges.

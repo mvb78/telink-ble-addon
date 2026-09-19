@@ -96,19 +96,23 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
     """
     if not targets:
         return False, "No targets"
-    if dst is not None:
-        # Explicit mesh destination: one working relay lamp injects the packet.
-        # Prefer lamps currently provisioned in the mesh (password==8888) over
-        # e.g. a broken/out-of-mesh head.
+    if dst is not None or mac is not None:
+        # Explicit mesh destination or single lamp: ONE working relay lamp
+        # injects the packet (a group packet reaches every member via the mesh
+        # fabric). Prefer lamps currently provisioned (password==8888) over a
+        # broken/out-of-mesh head; try each candidate in turn so a temporarily
+        # missing session fails fast to another instead of falling into the
+        # slow direct-connect scan.
         candidates = ([t for t in targets if t.get("password") == "8888"]
                       + [t for t in targets if t.get("password") != "8888"])
         selector, expected = "all", 1
-    elif mac is not None:
-        selector, expected, candidates = "all", 1, None
     else:
-        # Broadcast to all: the mesh fabric relays ONE packet to every member,
-        # so any connected session is enough; we accept whatever the daemon did.
-        selector, expected, candidates = "all", None, None
+        # Pure broadcast (no dst/mac): the mesh fabric relays ONE packet to
+        # every member. Any connected session suffices — try each candidate
+        # relay so a single dead session can't wedge the whole group command.
+        candidates = ([t for t in targets if t.get("password") == "8888"]
+                      + [t for t in targets if t.get("password") != "8888"])
+        selector, expected = "all", 1
     # Packet destination: explicit group dst wins; then unicast to a single
     # provisioned lamp's own mesh address (so one lamp ≠ all lamps); else broadcast.
     if dst is not None:
@@ -117,14 +121,9 @@ async def _execute(opcode, params, targets, dst=None, mac=None):
         packet_address = int(targets[0]["mesh_address"])
     else:
         packet_address = BROADCAST
-    if candidates is None:
-        send_mac = mac
-        if _try_daemon(opcode, params, selector, send_mac, packet_address, expected_count=expected):
-            return True, "OK (daemon)"
-    else:
-        for relay in candidates:
-            if _try_daemon(opcode, params, selector, relay["mac"], packet_address, expected_count=expected):
-                return True, f"OK (daemon via {relay['mac']})"
+    for relay in candidates:
+        if _try_daemon(opcode, params, selector, relay["mac"], packet_address, expected_count=expected):
+            return True, f"OK (daemon via {relay['mac']})"
     ok = await run_on_lamp(targets[0], opcode, params, packet_address)
     return (True, "OK (direct)") if ok else (False, "direct connect failed")
 
@@ -631,7 +630,11 @@ def api_group_add_lamp(name):
     if not targets:
         return jsonify({"error": f"lamp {mac} not found"}), 404
     p = bytes([0x01, addr & 0xFF, (addr >> 8) & 0xFF])
-    ok, msg = _run_async(_execute(0xD7, p, targets))
+    # Unicast the 0xD7 to THIS lamp's own mesh address (the reliable path the
+    # lab proved): the lamp learns its group membership in firmware. Fall back
+    # to the broadcast path only when no mesh address is known yet.
+    ok, msg = _run_async(_execute(0xD7, p, targets, mac=mac.upper(),
+                                  dst=targets[0].get("mesh_address") or addr))
     if ok:
         group_registry.add_member(group, mac)
         group_registry.save(groups)
@@ -654,7 +657,8 @@ def api_group_remove_lamp(name):
     if not targets:
         return jsonify({"error": f"lamp {mac} not found"}), 404
     p = bytes([0x00, addr & 0xFF, (addr >> 8) & 0xFF])
-    ok, msg = _run_async(_execute(0xD7, p, targets))
+    ok, msg = _run_async(_execute(0xD7, p, targets, mac=mac.upper(),
+                                  dst=targets[0].get("mesh_address") or addr))
     if ok:
         group_registry.remove_member(group, mac)
         group_registry.save(groups)

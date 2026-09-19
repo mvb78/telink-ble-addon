@@ -27,4 +27,4 @@ _pw_env = _os.environ.get("TELINK_KNOWN_PASSWORDS")
 KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else list(DEFAULT_KNOWN_PASSWORDS)
 
 # Scan duration in seconds during discovery (add-on option).
-SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "45"))
+SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "60"))
