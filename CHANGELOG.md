@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.5 - 2026-09-20 (confirmation requires value match)
+- `_confirm_push` no longer counts ANY push as success: only a push (or
+  query answer) reflecting the commanded on/brightness/colortemp values
+  confirms actuation. Stale relays can no longer mask a dropped packet.
+
 ## 1.6.4 - 2026-09-20 (query fallback closes lost-push gap)
 - Daemon send confirmation now distinguishes lost pushes from dropped
   packets: on push timeout it queries 0xDA directly and compares the answer

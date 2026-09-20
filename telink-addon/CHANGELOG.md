@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.5 - 2026-09-20 (confirmation requires value match)
+- Push confirmation compares values via `_push_matches_command`; stale
+  pushes no longer validate a send.
+
 ## 1.6.4 - 2026-09-20 (query fallback closes lost-push gap)
 - `_confirm_push` queries 0xDA on push timeout and compares against the
   commanded on/brightness/colortemp before declaring failure.

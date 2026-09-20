@@ -332,10 +332,17 @@ class DaemonSession:
         deadline = asyncio.get_event_loop().time() + _PUSH_WAIT_S
         while asyncio.get_event_loop().time() < deadline:
             if self._push_count != push_before:
-                return
+                # A push arrived — but only a push REFLECTING the command
+                # proves actuation (stale relays/keepalive echoes carry old
+                # values and must not count as success).
+                st = self.state_cache
+                if st is not None and _push_matches_command(st, opcode, params):
+                    return
+                push_before = self._push_count
             await asyncio.sleep(0.2)
-        # No push seen — but the push itself may have been lost in noise
-        # while the lamp did actuate. Ask directly before declaring failure.
+        # No matching push seen — but the push itself may have been lost in
+        # noise while the lamp did actuate. Ask directly before declaring
+        # failure.
         try:
             pkt = await self._query_locked(0xDA, _STATUS_PARAMS, 0xDB, timeout=4.0)
         except Exception:
