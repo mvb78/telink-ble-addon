@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.8 - 2026-09-20 (bounded disconnects — no more whole-daemon freezes)
+- Every `disconnect()` on a command/reconnect/keepalive path now goes
+  through `_safe_disconnect()` (10 s hard timeout). A BlueZ-side hang
+  inside disconnect while holding the global adapter lock froze the entire
+  command path (TCP state reads kept working — the "alive but deaf"
+  signature) with zero log output.
+
 ## 1.6.7 - 2026-09-20 (bounded connects — no single lamp can wedge startup)
 - `BleakClient.connect()` wrapped in a 15 s timeout (BlueZ can hang inside
   connect forever on a stale adapter); timeout disconnects cleanly and the

@@ -246,6 +246,20 @@ class DaemonSession:
             timeout=_LINK_VERIFY_TIMEOUT,
         )
 
+    async def _safe_disconnect(self) -> None:
+        """Disconnect with a hard timeout.
+
+        A BlueZ-side hang inside disconnect() must never wedge the caller:
+        send()/reconnect paths hold the global adapter lock while calling
+        this, so an unbounded disconnect would freeze the whole daemon's
+        command path (state reads keep working — exactly the observed
+        "TCP alive, sends time out" signature).
+        """
+        try:
+            await asyncio.wait_for(self.ctrl.disconnect(), timeout=10.0)
+        except Exception:
+            pass
+
     async def send(self, opcode: int, params: bytes, address: int):
         """Send a mesh command with link verification and bounded reconnect.
 
@@ -288,10 +302,7 @@ class DaemonSession:
                     if attempt < _SEND_ATTEMPTS:
                         try:
                             # drop the dead link first so _reconnect rebuilds
-                            try:
-                                await self.ctrl.disconnect()
-                            except Exception:
-                                pass
+                            await self._safe_disconnect()
                             await self._reconnect(spawn_keepalive=False)
                         except Exception as reconnect_error:
                             last_error = reconnect_error
@@ -424,10 +435,7 @@ class DaemonSession:
         # session lock (all current callers do); _ADAPTER_LOCK is always a
         # leaf here, so lock ordering stays deadlock-free.
         saved_seq = self.ctrl.seq_manager
-        try:
-            await self.ctrl.disconnect()
-        except Exception:
-            pass
+        await self._safe_disconnect()
         self.ctrl = TelinkController(
             self.lamp["mac"], self.lamp["name"], self.lamp["password"],
             initial_seq=self.lamp.get("last_seq")
@@ -471,10 +479,7 @@ class DaemonSession:
                         failed += 1
                         if failed >= 2:
                             print(f"  [{self.lamp['name']}] keepalive unresponsive - dropping link", flush=True)
-                            try:
-                                await self.ctrl.disconnect()
-                            except Exception:
-                                pass
+                            await self._safe_disconnect()
                             failed = 0
                             continue
                     else:

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.8 - 2026-09-20 (bounded disconnects)
+- `_safe_disconnect()` (10 s timeout) on all lock-holding paths: a hung
+  BlueZ disconnect can no longer freeze the daemon's command path.
+
 ## 1.6.7 - 2026-09-20 (bounded connects)
 - 15 s timeout around `BleakClient.connect()` + 90 s guard around each
   initial `start()`: a hung BLE stack call fails fast into reconnect logic
