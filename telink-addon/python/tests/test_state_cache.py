@@ -111,3 +111,19 @@ def test_maybe_bump_seq_when_push_stale():
     s._maybe_bump_seq()
     assert s.ctrl.seq_manager.seq > before
     assert s.ctrl.seq_manager.seq - before <= _SEQ_BUMP + 2
+
+
+def test_reconcile_plan_splits_own_vs_others():
+    from telink_daemon import _reconcile_plan
+    groups = [
+        {"name": "Oberlicht", "address": 32768,
+         "lamps": ["68:EC:62:02:8A:54", "68:EC:62:02:87:BC", "68:EC:62:02:87:B3"]},
+        {"name": "Arbeitsplatte", "address": 32769,
+         "lamps": ["68:EC:62:02:8A:E9", "68:EC:62:02:87:A5", "68:EC:62:02:87:7C"]},
+    ]
+    remove, add = _reconcile_plan(groups, "68:EC:62:02:87:7C")
+    assert remove == [32768] and add == [32769]
+    remove, add = _reconcile_plan(groups, "68:ec:62:02:87:b3")  # case-insensitive
+    assert remove == [32769] and add == [32768]
+    remove, add = _reconcile_plan([], "68:EC:62:02:87:7C")
+    assert (remove, add) == ([], [])

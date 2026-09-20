@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.6 - 2026-09-20 (nightly group reconcile)
+- `_reconcile_loop` + `_reconcile_plan` (unit-tested): daily firmware
+  membership re-assertion per lamp.
+
 ## 1.6.5 - 2026-09-20 (confirmation requires value match)
 - Push confirmation compares values via `_push_matches_command`; stale
   pushes no longer validate a send.

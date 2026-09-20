@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.6 - 2026-09-20 (nightly group reconcile)
+- Daemon `_reconcile_loop`: daily at `TELINK_RECONCILE_TIME` (default 03:00)
+  re-asserts every live lamp's 0xD7 firmware membership from groups.json
+  (remove-others + add-own, unicast via own session). Tables converge
+  nightly instead of rotting.
+
 ## 1.6.5 - 2026-09-20 (confirmation requires value match)
 - `_confirm_push` no longer counts ANY push as success: only a push (or
   query answer) reflecting the commanded on/brightness/colortemp values

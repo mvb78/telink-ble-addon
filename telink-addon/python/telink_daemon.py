@@ -27,6 +27,7 @@ import sys
 import time
 
 import lamp_registry as registry
+import group_registry
 from telink_ble import TelinkController, SequenceManager
 from config import CHAR_STATUS_UUID
 
@@ -685,6 +686,79 @@ def _missing_lamp_entries(sessions: dict[str, DaemonSession]) -> list[dict]:
     return [l for l in lamps if l["mac"].upper() not in present]
 
 
+# Nightly group-membership reconcile: re-assert every lamp's 0xD7 firmware
+# membership from groups.json (remove-all-others + add-own, unicast through
+# the lamp's own session). Firmware tables drift or never stick (0xD7 needs
+# a quiet link); re-asserting daily during dead hours converges them instead
+# of letting them rot. TELINK_RECONCILE_TIME="HH:MM" local (default 03:00);
+# empty/0 disables.
+_RECONCILE_TIME = (os.environ.get("TELINK_RECONCILE_TIME", "03:00") or "").strip()
+
+
+def _reconcile_plan(groups: list[dict], mac: str) -> tuple[list[int], list[int]]:
+    """(remove_addrs, add_addrs) for one lamp from registry membership."""
+    mac_u = mac.upper()
+    mine = sorted({int(g["address"]) for g in groups
+                   if mac_u in {str(m).upper() for m in (g.get("lamps") or [])}})
+    others = sorted({int(g["address"]) for g in groups} - set(mine))
+    return others, mine
+
+
+async def _reconcile_loop(sessions: dict[str, DaemonSession],
+                          stop_event: asyncio.Event) -> None:
+    """Daily firmware group-membership reconcile, one lamp at a time."""
+    import datetime as _dt
+
+    def _next_run() -> float:
+        try:
+            hh, mm = _RECONCILE_TIME.split(":")
+            now = _dt.datetime.now()
+            nxt = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+            if nxt <= now:
+                nxt += _dt.timedelta(days=1)
+            return nxt.timestamp()
+        except Exception:
+            return time.time() + 24 * 3600
+
+    if not _RECONCILE_TIME or _RECONCILE_TIME == "0":
+        return
+    while not stop_event.is_set():
+        delay = max(0.0, _next_run() - time.time())
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=delay)
+            return  # shutting down
+        except asyncio.TimeoutError:
+            pass
+        try:
+            groups = group_registry.load()
+        except Exception as err:
+            print(f"reconcile: cannot load groups: {err}", flush=True)
+            continue
+        if not groups:
+            continue
+        ok, fail = 0, 0
+        for mac, sess in list(sessions.items()):
+            if stop_event.is_set():
+                return
+            try:
+                if not (sess.ctrl.client and sess.ctrl.client.is_connected):
+                    continue  # only touch live sessions; the watcher owns the rest
+                remove_addrs, add_addrs = _reconcile_plan(groups, mac)
+                dst = sess.lamp.get("mesh_address")
+                for op, addr in ([(0, a) for a in remove_addrs]
+                                 + [(1, a) for a in add_addrs]):
+                    await sess.send(0xD7, bytes([op, addr & 0xFF, (addr >> 8) & 0xFF]),
+                                    int(dst) if dst else 0xFFFF)
+                ok += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as err:
+                fail += 1
+                print(f"reconcile: {mac} failed: {err}", flush=True)
+        print(f"reconcile: {ok} ok, {fail} failed "
+              f"({len(sessions)} sessions)", flush=True)
+
+
 async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.Event,
                         connect_busy: asyncio.Event | None = None) -> None:
     """
@@ -883,6 +957,9 @@ async def start_daemon():
         _idle_sweeper(sessions, stop_event)
     )
     fd_watchdog = asyncio.get_event_loop().create_task(_fd_watchdog())
+    reconciler = asyncio.get_event_loop().create_task(
+        _reconcile_loop(sessions, stop_event)
+    )
 
     async with server:
         await stop_event.wait()
@@ -890,7 +967,8 @@ async def start_daemon():
 
     watcher.cancel()
     idle_sweeper.cancel()
-    for task in (watcher, idle_sweeper):
+    reconciler.cancel()
+    for task in (watcher, idle_sweeper, reconciler):
         try:
             await task
         except asyncio.CancelledError:
