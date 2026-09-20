@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.7 - 2026-09-20 (bounded connects — no single lamp can wedge startup)
+- `BleakClient.connect()` wrapped in a 15 s timeout (BlueZ can hang inside
+  connect forever on a stale adapter); timeout disconnects cleanly and the
+  normal reconnect/backoff path applies.
+- `_build_sessions` wraps each `start()` in a 90 s `wait_for`: one wedged
+  lamp blocked all six behind it for 4+ minutes before this guard.
+
 ## 1.6.6 - 2026-09-20 (nightly group reconcile)
 - Daemon `_reconcile_loop`: daily at `TELINK_RECONCILE_TIME` (default 03:00)
   re-asserts every live lamp's 0xD7 firmware membership from groups.json

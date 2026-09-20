@@ -278,7 +278,18 @@ class TelinkController:
         # these lamps rotate RPA, so a string reconnect can miss/hang. Bleak
         # resolves the device's current address from the BLEDevice object.
         self.client = BleakClient(target, **client_kwargs())
-        await self.client.connect()
+        # Bounded: BlueZ can hang inside connect() forever on a stale
+        # adapter (e.g. right after container start), which would wedge the
+        # whole daemon behind one lamp. Fail fast so reconnect/backoff logic
+        # applies instead.
+        try:
+            await asyncio.wait_for(self.client.connect(), timeout=15.0)
+        except asyncio.TimeoutError:
+            try:
+                await self.client.disconnect()
+            except Exception:
+                pass
+            raise Exception(f"{self.mac} connect timed out (adapter stale?)")
         await asyncio.sleep(0.5)
 
     async def disconnect(self):

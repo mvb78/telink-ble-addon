@@ -629,6 +629,9 @@ async def _build_sessions() -> dict[str, DaemonSession]:
     # Connect serially (not concurrently): BlueZ/dbus errors with
     # "Operation already in progress" when several GATT connects hit the
     # adapter at once. Serial connects + a small settle delay are reliable.
+    # Each start is additionally hard-bounded: a hung BLE stack call must
+    # never stall the whole initial connect (one wedged lamp blocked all
+    # six for 4+ minutes before this guard existed).
     for mac, sess in sessions.items():
         for attempt in range(_MAX_START_ATTEMPTS):
             if attempt > 0:
@@ -638,8 +641,11 @@ async def _build_sessions() -> dict[str, DaemonSession]:
                     pass
                 await asyncio.sleep(1.0)
             try:
-                await sess.start()
+                await asyncio.wait_for(sess.start(), timeout=90.0)
                 break
+            except asyncio.TimeoutError:
+                print(f"  [{sess.lamp['name']}] attempt {attempt + 1} timed out "
+                      f"(hung BLE stack, aborted)", flush=True)
             except Exception as e:
                 print(f"  [{sess.lamp['name']}] attempt {attempt + 1} failed: {e}", flush=True)
         if sess.ctrl.session_key is None:

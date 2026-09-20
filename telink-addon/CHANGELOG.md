@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.7 - 2026-09-20 (bounded connects)
+- 15 s timeout around `BleakClient.connect()` + 90 s guard around each
+  initial `start()`: a hung BLE stack call fails fast into reconnect logic
+  instead of wedging the daemon behind one lamp.
+
 ## 1.6.6 - 2026-09-20 (nightly group reconcile)
 - `_reconcile_loop` + `_reconcile_plan` (unit-tested): daily firmware
   membership re-assertion per lamp.
