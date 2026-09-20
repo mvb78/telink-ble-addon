@@ -76,11 +76,10 @@ def _open_hci_monitor() -> socket.socket | None:
     Requires CAP_NET_ADMIN.  Returns None if permission denied (as it does
     inside HAOS add-on containers, where raw AF_BLUETOOTH sockets are denied).
 
-    When TELINK_HCI_ADAPTER is set the monitor binds to that adapter only
-    (index from hci_adapter_index()); otherwise it binds to HCI_DEV_NONE
-    (all adapters, old behavior).
-
-    To use without sudo:
+    The monitor channel only binds to HCI_DEV_NONE (all adapters); exclusivity
+    is enforced per-packet instead (see _monitor_index_ok()): every btmon
+    packet carries its adapter index at [2..3], and readers drop anything
+    that is not the pinned adapter. To use without sudo:
       sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f .venv/bin/python3)
     """
     try:
@@ -88,10 +87,8 @@ def _open_hci_monitor() -> socket.socket | None:
     except OSError as err:
         print(f"  [warn] HCI monitor: socket(AF_BLUETOOTH) failed: {err}", file=sys.stderr, flush=True)
         return None
-    dev = hci_adapter_index()
-    dev = _HCI_DEV_NONE if dev is None else dev
     try:
-        addr = _sockaddr_hci(_AF_BLUETOOTH, dev, _HCI_CHANNEL_MONITOR)
+        addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
         ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
     except OSError as err:
         print(f"  [warn] HCI monitor: bind failed: {err}", file=sys.stderr, flush=True)
@@ -104,6 +101,18 @@ def _open_hci_monitor() -> socket.socket | None:
         return None
     sock.settimeout(0.2)  # blocking with short timeout — avoid epoll issues
     return sock
+
+
+def _monitor_index_ok(pkt_index: int) -> bool:
+    """True when this btmon packet's adapter index matches the pin.
+
+    The monitor channel always binds to HCI_DEV_NONE (a per-adapter bind is
+    rejected with EINVAL), so exclusivity is enforced here: with
+    TELINK_HCI_ADAPTER set, only packets from that controller index are
+    processed. Unset = accept everything (old behavior).
+    """
+    want = hci_adapter_index()
+    return want is None or pkt_index == want
 
 
 class AddrConfirmWatcher:
@@ -160,16 +169,19 @@ class AddrConfirmWatcher:
 
         Monitor packet layout: [0..1] opcode LE u16, [2..3] adapter index,
         [4..5] payload length LE u16, [6..] payload. Returns the complete
-        packets plus the trailing incomplete bytes.
+        packets plus the trailing incomplete bytes. Packets from a different
+        adapter than the TELINK_HCI_ADAPTER pin are dropped here.
         """
         packets = []
         pos = 0
         while pos + 6 <= len(buf):
             pkt_opcode = buf[pos] | (buf[pos + 1] << 8)
+            pkt_index = buf[pos + 2] | (buf[pos + 3] << 8)
             pkt_len = buf[pos + 4] | (buf[pos + 5] << 8)
             if pos + 6 + pkt_len > len(buf):
                 break
-            packets.append((pkt_opcode, buf[pos + 6: pos + 6 + pkt_len]))
+            if _monitor_index_ok(pkt_index):
+                packets.append((pkt_opcode, buf[pos + 6: pos + 6 + pkt_len]))
             pos += 6 + pkt_len
         return packets, buf[pos:]
 
@@ -323,9 +335,13 @@ class TelinkController:
             pos = 0
             while pos + 6 <= len(buf):
                 pkt_opcode = buf[pos] | (buf[pos + 1] << 8)
+                pkt_index = buf[pos + 2] | (buf[pos + 3] << 8)
                 pkt_len = buf[pos + 4] | (buf[pos + 5] << 8)
                 if pos + 6 + pkt_len > len(buf):
                     break
+                if not _monitor_index_ok(pkt_index):
+                    pos += 6 + pkt_len
+                    continue
                 payload = buf[pos + 6: pos + 6 + pkt_len]
                 pos += 6 + pkt_len
 
