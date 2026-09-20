@@ -504,6 +504,11 @@ class DaemonSession:
             self._last_cmd_time = asyncio.get_event_loop().time()
             return bytes(data)
 
+    async def _connect_and_login(self) -> None:
+        """Single connect+login sequence, bounded by the caller."""
+        await self.ctrl.connect()
+        await self.ctrl.login()
+
     async def _reconnect(self, spawn_keepalive: bool = True):
         # NOTE: the caller must already hold the global adapter lock OR the
         # session lock (all current callers do); _ADAPTER_LOCK is always a
@@ -517,8 +522,18 @@ class DaemonSession:
         # preserve monotonic seq across reconnects
         if saved_seq.seq != self.ctrl.seq_manager.seq:
             self.ctrl.seq_manager = saved_seq
-        await self.ctrl.connect()
-        await self.ctrl.login()
+        # Hard-bounded: login()'s GATT ops carry no timeout of their own and
+        # BlueZ can hang inside them forever. An unbounded hang here (while
+        # holding the global adapter lock) froze the entire command path and
+        # piled up one leaked CLOSE_WAIT socket per queued poll (~5/min).
+        try:
+            await asyncio.wait_for(self._connect_and_login(), timeout=40.0)
+        except asyncio.TimeoutError:
+            try:
+                await self.ctrl.disconnect()
+            except Exception:
+                pass
+            raise Exception(f"{self.lamp['mac']} reconnect timed out (BLE stack hung)")
         self._last_cmd_time = asyncio.get_event_loop().time()
         if spawn_keepalive and (self._keepalive_task is None
                                 or self._keepalive_task.done()):

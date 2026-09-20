@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.6.11 - 2026-09-20 (bounded reconnect login)
+- 40 s guard around connect+login in `_reconnect` via `_connect_and_login`.
+
 ## 1.6.10 - 2026-09-20 (stable adapter identity)
 - `resolve_hci_adapter()`: `usb:VID:PID`/MAC selectors with zero-padded
   sysfs compare + unit test.

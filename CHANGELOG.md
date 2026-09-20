@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.11 - 2026-09-20 (bounded reconnect login)
+- `_reconnect` wraps connect+login in a 40 s guard. A BlueZ hang inside
+  login's GATT ops (no timeout of their own) while holding the global
+  adapter lock froze the whole command path: queued API polls piled up as
+  CLOSE_WAIT sockets (~5/min) with zero log output. Diagnosed live via
+  fd-to-TCP-state join.
+
 ## 1.6.10 - 2026-09-20 (stable adapter identity across reboots)
 - `TELINK_HCI_ADAPTER` accepts `usb:VVVV:PPPP` (and BD_ADDR), resolved to the
   current hciN on every use. Kernel enumeration flips across reboots
