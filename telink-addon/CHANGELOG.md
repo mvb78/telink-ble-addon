@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.4 - 2026-09-20 (query fallback closes lost-push gap)
+- `_confirm_push` queries 0xDA on push timeout and compares against the
+  commanded on/brightness/colortemp before declaring failure.
+- Shared `_decode_status_push` / `_push_matches_command` helpers used by
+  both the push cache and the confirmation path.
+
 ## 1.6.3 - 2026-09-20 (actuation confirmation)
 - Verified sends now wait for the lamp's actuation push (unicast to own
   lamp); silence triggers reconnect+retry instead of phantom success.

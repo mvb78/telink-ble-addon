@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.4 - 2026-09-20 (query fallback closes lost-push gap)
+- Daemon send confirmation now distinguishes lost pushes from dropped
+  packets: on push timeout it queries 0xDA directly and compares the answer
+  against the commanded state. Match = success (no pointless reconnect);
+  mismatch/no answer = reconnect+retry as before.
+
 ## 1.6.3 - 2026-09-20 (actuation confirmation + pre-emptive seq bump)
 - Daemon `send()` now confirms actuation, not just link liveness: after a
   verified unicast write to the session's own lamp it waits up to

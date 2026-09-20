@@ -91,6 +91,45 @@ _reconnect_fails: dict[str, int] = {}
 _reconnect_backoff: dict[str, float] = {}
 
 
+def _decode_status_push(plain: bytes) -> tuple[dict | None, None]:
+    """Decode a vendor 0xDB status frame into a state entry (no ts).
+
+    Shared by note_plain() and the send() confirmation-query path so both
+    interpret lamp state identically. Semantics per the 1.3.0 correct-off
+    rule: a lamp always reports state ON; real off = brightness 0.
+    Returns (entry, None) — the second slot keeps symmetry with the old
+    inline code that also extracted the mesh sno from the raw frame.
+    """
+    if len(plain) < 20 or plain[7] != 0xDB:
+        return None, None
+    p = plain[10:]
+    if len(p) < 7:
+        return None, None
+    bri = p[6]
+    rgb = [p[7], p[8], p[9]] if len(p) >= 10 else None
+    return ({
+        "on": bool(p[5]) and bri > 0,
+        "brightness": bri,
+        "colortemp": max(0, min(100, 100 - p[3])),  # warm%
+        "rgb": rgb,
+    }, None)
+
+
+def _push_matches_command(entry: dict, opcode: int, params: bytes) -> bool:
+    """True when a decoded status entry reflects the just-sent command."""
+    try:
+        if opcode == 0xD0:  # on/off
+            return bool(entry.get("on")) == bool(params[0])
+        if opcode == 0xD2 and params:  # brightness 0-100
+            return abs(int(entry.get("brightness") or 0) - int(params[0])) <= 5
+        if opcode == 0xE2 and len(params) >= 2 and params[0] == 0x05:
+            # colortemp warm%: 100 - cool%
+            return abs(int(entry.get("colortemp") or 0) - (100 - int(params[1]))) <= 8
+    except (TypeError, ValueError, IndexError):
+        return False
+    return True
+
+
 class DaemonSession:
     def __init__(self, lamp: dict):
         self.lamp = lamp
@@ -121,10 +160,8 @@ class DaemonSession:
           * mesh-layer frames (decrypted payload starts with op|0xC0) —
             relays of OTHER lamps; not attributable per-session, skipped.
         """
-        if len(plain) < 20 or plain[7] != 0xDB:
-            return
-        p = plain[10:]
-        if len(p) < 7:
+        entry, _ = _decode_status_push(plain)
+        if entry is None:
             return
 
         if raw is not None and len(raw) >= 3:
@@ -145,14 +182,6 @@ class DaemonSession:
                     print(f"  [{self.lamp.get('name', self.lamp['mac'])}] seq "
                           f"{ours} -> {self.ctrl.seq_manager.seq} (lamp ahead)", flush=True)
 
-        bri = p[6]
-        rgb = [p[7], p[8], p[9]] if len(p) >= 10 else None
-        entry = {
-            "on": bool(p[5]) and bri > 0,
-            "brightness": bri,
-            "colortemp": max(0, min(100, 100 - p[3])),  # warm%
-            "rgb": rgb,
-        }
         entry["ts"] = round(time.time(), 3)
         old = self.state_cache
         # Always refresh: ts means last-SEEN push (liveness), not last change.
@@ -167,7 +196,7 @@ class DaemonSession:
             return
         if os.environ.get("TELINK_DEBUG_STATE"):
             print(f"  [{self.lamp.get('name', self.lamp['mac'])}] state -> "
-                  f"{'on' if entry['on'] else 'off'} bri={bri}", flush=True)
+                  f"{'on' if entry['on'] else 'off'} bri={entry['brightness']}", flush=True)
 
     async def start(self):
         async with _ADAPTER_LOCK:
@@ -281,13 +310,17 @@ class DaemonSession:
 
     async def _confirm_push(self, push_before: int, opcode: int, params: bytes,
                             address: int) -> None:
-        """Wait briefly for the lamp's actuation push after a verified send.
+        """Confirm actuation after a verified unicast send to the own lamp.
 
         Only meaningful for unicast writes to this session's own lamp
         (address == its mesh address): a processed write is always followed
-        by a 0xDB push. No push within the window means the packet was
-        dropped (stale seq) or the lamp-side session is wedged — raise so
-        send() reconnects and retries instead of reporting phantom success.
+        by a 0xDB push. Path:
+          1. wait up to _PUSH_WAIT_S for any fresh push → success;
+          2. else query 0xDA and compare the answer against the commanded
+             state — if it matches, the lamp actuated but its push was lost
+             in radio noise → success (no pointless reconnect);
+          3. else raise so send() reconnects and retries instead of
+             reporting phantom success.
         """
         own_addr = self.lamp.get("mesh_address")
         try:
@@ -301,9 +334,42 @@ class DaemonSession:
             if self._push_count != push_before:
                 return
             await asyncio.sleep(0.2)
+        # No push seen — but the push itself may have been lost in noise
+        # while the lamp did actuate. Ask directly before declaring failure.
+        try:
+            pkt = await self._query_locked(0xDA, _STATUS_PARAMS, 0xDB, timeout=4.0)
+        except Exception:
+            pkt = None
+        if pkt:
+            entry, _seq = _decode_status_push(pkt)
+            if entry is not None:
+                entry["ts"] = round(time.time(), 3)
+                self.state_cache = entry
+                self._push_count += 1
+                if _push_matches_command(entry, opcode, params):
+                    return
         raise TimeoutError(
             f"no actuation push from {self.lamp['mac']} within {_PUSH_WAIT_S}s "
             f"(op={opcode:#04x}); packet likely dropped")
+
+    async def _query_locked(self, opcode: int, params: bytes,
+                            response_opcode: int, timeout: float = 4.0) -> bytes | None:
+        """query() body without lock handling — callers must hold both locks."""
+        if not self.ctrl.client or not self.ctrl.client.is_connected:
+            await self._reconnect(spawn_keepalive=False)
+        await self.ctrl.drain_notifications(duration=0.2)
+        try:
+            await self.ctrl.send_command(opcode, params, 0xFFFF)
+            await asyncio.sleep(0.15)
+            await self.ctrl.send_command(opcode, params, 0xFFFF)
+        except Exception:
+            await self._reconnect(spawn_keepalive=False)
+            await self.ctrl.send_command(opcode, params, 0xFFFF)
+            await asyncio.sleep(0.15)
+            await self.ctrl.send_command(opcode, params, 0xFFFF)
+        pkt = await self.ctrl.wait_for_opcode(response_opcode, timeout=timeout)
+        self._last_cmd_time = asyncio.get_event_loop().time()
+        return pkt
 
     async def drain(self, duration: float = 0.5):
         """Clear stale notifications from this session's queue without acting on them."""
@@ -316,22 +382,7 @@ class DaemonSession:
                     timeout: float = 4.0) -> bytes | None:
         """Send a query command over this session and return the matching decrypted response."""
         async with self._lock, _ADAPTER_LOCK:
-            if not self.ctrl.client or not self.ctrl.client.is_connected:
-                await self._reconnect(spawn_keepalive=False)
-            # Drop queued/stale notifications so we only read fresh responses.
-            await self.ctrl.drain_notifications(duration=0.2)
-            try:
-                await self.ctrl.send_command(opcode, params, 0xFFFF)
-                await asyncio.sleep(0.15)
-                await self.ctrl.send_command(opcode, params, 0xFFFF)
-            except Exception:
-                await self._reconnect(spawn_keepalive=False)
-                await self.ctrl.send_command(opcode, params, 0xFFFF)
-                await asyncio.sleep(0.15)
-                await self.ctrl.send_command(opcode, params, 0xFFFF)
-            pkt = await self.ctrl.wait_for_opcode(response_opcode, timeout=timeout)
-            self._last_cmd_time = asyncio.get_event_loop().time()
-            return pkt
+            return await self._query_locked(opcode, params, response_opcode, timeout)
 
     async def read_status(self) -> bytes | None:
         """Read the lamp's status characteristic (0d1913) over the live session.
