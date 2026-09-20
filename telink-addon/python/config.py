@@ -29,19 +29,90 @@ KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else list(DEFAULT_KNOWN_PASSWORD
 # Scan duration in seconds during discovery (add-on option).
 SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "60"))
 
-# Bluetooth adapter pinning: set TELINK_HCI_ADAPTER (e.g. "hci1") to drive
-# ONE adapter exclusively from all bleak scanner/client + raw-HCI-monitor
-# paths. Leave unset/empty for bleak's default (old behavior). Typical
-# layout: a dedicated USB dongle (hci1) for the Telink mesh, HA's own
-# Bluetooth kept on the internal adapter (hci0) — zero radio contention.
+# Bluetooth adapter pinning: drive ONE adapter exclusively from all bleak
+# scanner/client + raw-HCI-monitor paths. TELINK_HCI_ADAPTER accepts:
+#   "hciN"       — kernel name (FRAGILE: enumeration order flips across
+#                  reboots; observed hci0<->hci1 swap after a host reboot),
+#   "usb:VVVV:PPPP" — USB VID:PID in hex (STABLE: follows the physical
+#                  dongle regardless of enumeration, e.g. "usb:0b05:190e"
+#                  for the ASUS USB-BT500),
+#   AA:BB:CC:DD:EE:FF — adapter BD_ADDR (stable, needs `address` readable).
+# Empty/unset = bleak default (old behavior). Typical layout: the dedicated
+# USB dongle for the Telink mesh, HA's own Bluetooth on the internal adapter.
 HCI_ADAPTER = (_os.environ.get("TELINK_HCI_ADAPTER") or "").strip() or None
 
 
-def hci_adapter_index(name: str | None = HCI_ADAPTER) -> int | None:
-    """Map 'hciN' to N for the raw HCI monitor bind; None = all adapters."""
-    if not name:
-        return None
+def _sysfs_hci_entries() -> dict[str, dict[str, str]]:
+    """Map hciN -> {product, address} from sysfs (best effort)."""
+    out: dict[str, dict[str, str]] = {}
     try:
-        return int(str(name).lower().replace("hci", ""))
+        import pathlib as _pl
+        base = _pl.Path("/sys/class/bluetooth")
+        if not base.is_dir():
+            return out
+        for entry in base.iterdir():
+            name = entry.name
+            if not name.startswith("hci") or ":" in name:
+                continue
+            info: dict[str, str] = {}
+            try:
+                uevent = (entry / "device" / "uevent").read_text()
+                for line in uevent.splitlines():
+                    if line.startswith("PRODUCT="):
+                        info["product"] = line.split("=", 1)[1].strip()
+            except OSError:
+                pass
+            try:
+                info["address"] = (entry / "address").read_text().strip().upper()
+            except OSError:
+                pass
+            out[name] = info
+    except OSError:
+        pass
+    return out
+
+
+def resolve_hci_adapter(selector: str | None = HCI_ADAPTER) -> str | None:
+    """Resolve a stable adapter selector to the current kernel hciN name."""
+    if not selector:
+        return None
+    sel = selector.strip()
+    if sel.lower().startswith("hci"):
+        return sel.lower()  # explicit kernel name (fragile across reboots)
+    entries = _sysfs_hci_entries()
+    if sel.lower().startswith("usb:"):
+        want = sel[4:].lower().replace(":", "/")
+        want_parts = [p.zfill(4) for p in want.split("/")]
+
+        def _norm_product(raw: str) -> list[str]:
+            return [p.zfill(4) for p in raw.lower().split("/")]
+
+        for name in sorted(entries):
+            prod = _norm_product(entries[name].get("product", ""))
+            if len(prod) >= len(want_parts) and prod[:len(want_parts)] == want_parts:
+                return name
+        return None
+    normalized = sel.upper().replace("-", ":")
+    if len(normalized) == 17 and normalized.count(":") == 5:
+        for name in sorted(entries):
+            if entries[name].get("address", "").upper() == normalized:
+                return name
+        return None
+    return None
+
+
+def hci_adapter_index(name: str | None = None) -> int | None:
+    """Map an adapter selector to its kernel index for the monitor bind."""
+    resolved = resolve_hci_adapter(HCI_ADAPTER if name is None else name)
+    if resolved is None:
+        # Plain hciN without sysfs (or unset) — parse directly / all adapters.
+        if name is None:
+            return None
+        try:
+            return int(str(name).lower().replace("hci", ""))
+        except (TypeError, ValueError, AttributeError):
+            return None
+    try:
+        return int(resolved.lower().replace("hci", ""))
     except (TypeError, ValueError, AttributeError):
         return None

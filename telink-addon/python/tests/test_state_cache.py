@@ -183,3 +183,18 @@ def test_mesh_relay_updates_origin_session():
     finally:
         telink_daemon._mesh_src_to_mac = orig
         DaemonSession._sessions.clear()
+
+
+def test_resolve_hci_adapter_usb_vidpid(monkeypatch):
+    import config
+    entries = {"hci0": {"product": "b05/190e/200"},
+               "hci1": {"product": "bda/b85b/0"}}
+    monkeypatch.setattr(config, "_sysfs_hci_entries", lambda: entries)
+    # sysfs drops leading zeros (b05 vs 0b05) — must still match
+    assert config.resolve_hci_adapter("usb:0b05:190e") == "hci0"
+    assert config.resolve_hci_adapter("usb:0B05:190E") == "hci0"
+    assert config.resolve_hci_adapter("hci1") == "hci1"
+    assert config.resolve_hci_adapter("") is None
+    assert config.resolve_hci_adapter("usb:ffff:ffff") is None
+    # MAC form needs address fields (absent here -> None, no crash)
+    assert config.resolve_hci_adapter("AA:BB:CC:DD:EE:FF") is None

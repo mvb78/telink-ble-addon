@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.10 - 2026-09-20 (stable adapter identity across reboots)
+- `TELINK_HCI_ADAPTER` accepts `usb:VVVV:PPPP` (and BD_ADDR), resolved to the
+  current hciN on every use. Kernel enumeration flips across reboots
+  (observed hci0<->hci1 swap) which had silently repointed the pin at the
+  wrong radio. Deploy default: `usb:0b05:190e`.
+
 ## 1.6.9 - 2026-09-20 (mesh STATUS decode — keepalive traffic refreshes all lamps)
 - Daemon decodes mesh-layer 0x1B STATUS frames (previously discarded) and
   attributes them via the unencrypted src address mapped through the

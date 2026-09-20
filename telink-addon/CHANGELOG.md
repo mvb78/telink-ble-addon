@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.10 - 2026-09-20 (stable adapter identity)
+- `resolve_hci_adapter()`: `usb:VID:PID`/MAC selectors with zero-padded
+  sysfs compare + unit test.
+
 ## 1.6.9 - 2026-09-20 (mesh STATUS decode)
 - `_decode_mesh_status` + `_mesh_src_to_mac`: mesh-layer 0x1B frames update
   the origin lamp's cache (unit-tested). Vendor precedence preserved.

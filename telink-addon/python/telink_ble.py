@@ -15,17 +15,31 @@ from config import (
     VENDOR_ID,
     HCI_ADAPTER,
     hci_adapter_index,
+    resolve_hci_adapter,
 )
+
+
+def active_hci_adapter() -> str | None:
+    """Current kernel hciN name for the TELINK_HCI_ADAPTER pin (None = default).
+
+    Resolved on every call so a replugged/re-enumerated dongle is picked up
+    without restarts guessing stale hciN names. Cheap sysfs reads.
+    """
+    if not HCI_ADAPTER:
+        return None
+    return resolve_hci_adapter(HCI_ADAPTER)
 
 
 def scanner_kwargs() -> dict:
     """bleak scanner kwargs pinned to the exclusive adapter (if configured)."""
-    return {"adapter": HCI_ADAPTER} if HCI_ADAPTER else {}
+    name = active_hci_adapter()
+    return {"adapter": name} if name else {}
 
 
 def client_kwargs() -> dict:
     """bleak client kwargs pinned to the exclusive adapter (if configured)."""
-    return {"adapter": HCI_ADAPTER} if HCI_ADAPTER else {}
+    name = active_hci_adapter()
+    return {"adapter": name} if name else {}
 # CHAR_NOTIFY_UUID (0d1911): lamp sends ATT_NOTIFY (opcode 0x1b) at handle 0x0012
 # automatically after commands, WITHOUT requiring CCCD to be set.
 # BlueZ discards these packets because CCCD was never written (and the lamp rejects
@@ -249,7 +263,7 @@ class TelinkController:
         # sleeping 5 s before the first look — a lamp that is advertising is
         # found in ~0.25 s, not >=5 s (this was the reconnect penalty).
         if HCI_ADAPTER:
-            print(f"  [ble] scanning on exclusive adapter {HCI_ADAPTER} ...", flush=True)
+            print(f"  [ble] scanning on exclusive adapter {active_hci_adapter() or HCI_ADAPTER} ...", flush=True)
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
         async with BleakScanner(callback, **scanner_kwargs()) as scanner:
