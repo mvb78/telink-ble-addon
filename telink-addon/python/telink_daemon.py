@@ -116,6 +116,50 @@ def _decode_status_push(plain: bytes) -> tuple[dict | None, None]:
     }, None)
 
 
+def _mesh_src_to_mac(src_addr: int) -> str | None:
+    """Map a mesh-layer source address to a registry MAC.
+
+    Mesh STATUS frames carry their origin lamp's unicast address in the
+    (unencrypted) frame header; the registry holds each lamp's provisioned
+    mesh_address, giving an exact, session-independent attribution — no
+    guessing from signal or timing.
+    """
+    try:
+        lamps = registry.load()
+    except Exception:
+        return None
+    for lamp in lamps:
+        try:
+            if int(lamp.get("mesh_address")) == int(src_addr):
+                return str(lamp.get("mac", "")).upper() or None
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _decode_mesh_status(plain: bytes) -> dict | None:
+    """Decode a mesh-layer 0x1B STATUS frame into a state entry (no ts).
+
+    Layout mirrors the validated `parse_mesh_status` (web_app
+    mesh-get-status): [op|0xC0, cw LE 2B, ww LE 2B, bri LE 1-2B].
+    Brightness scale: vendor 0-100 used as-is, larger values scaled from
+    the 0-32767 PWM domain. Warm% from the cw/ww ratio; None when unknown.
+    """
+    if len(plain) < 6 or (plain[0] & 0xC0) != 0xC0 or (plain[0] & 0x3F) != 0x1B:
+        return None
+    cw = plain[1] | (plain[2] << 8)
+    ww = plain[3] | (plain[4] << 8)
+    br = (plain[5] | (plain[6] << 8)) if len(plain) > 6 else plain[5]
+    bri = br if br <= 100 else round(max(0, min(32767, br)) * 100 / 32767)
+    warm = round(100 * ww / (cw + ww)) if (cw + ww) > 0 else None
+    return {
+        "on": br > 0,
+        "brightness": max(0, min(100, bri)),
+        "colortemp": warm,
+        "rgb": None,
+    }
+
+
 def _push_matches_command(entry: dict, opcode: int, params: bytes) -> bool:
     """True when a decoded status entry reflects the just-sent command."""
     try:
@@ -132,8 +176,15 @@ def _push_matches_command(entry: dict, opcode: int, params: bytes) -> bool:
 
 
 class DaemonSession:
+    # All live session objects by MAC — lets mesh-relayed STATUS frames
+    # (captured on ANY session) update the ORIGIN lamp's cache, not the
+    # capturing session's. Replacements overwrite by MAC key; liveness is
+    # always re-checked via is_connected before use.
+    _sessions: dict[str, "DaemonSession"] = {}
+
     def __init__(self, lamp: dict):
         self.lamp = lamp
+        DaemonSession._sessions[str(lamp.get("mac", "")).upper()] = self
         self.ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
                                      initial_seq=lamp.get("last_seq"),
                                      on_plain=self.note_plain)
@@ -151,16 +202,39 @@ class DaemonSession:
         self._keepalive_task: asyncio.Task | None = None
 
     def note_plain(self, plain: bytes, raw: bytes | None = None):
-        """Decode a lamp's status push into the state cache + seq-sync.
+        """Decode status pushes into state caches + seq-sync.
 
-        The lamp broadcasts its state after every mesh write. Two frame
-        formats arrive here:
-          * vendor 0x0211 (20 B, op at [7] = 0xDB) — the lamp's own direct
-            GATT push on this session; its leading 3 bytes are the mesh
-            sequence number the lamp just used/heeded,
-          * mesh-layer frames (decrypted payload starts with op|0xC0) —
-            relays of OTHER lamps; not attributable per-session, skipped.
+        Two frame formats arrive here (vendor checked first, same
+        precedence as wait_for_opcode):
+          * vendor 0x0211 (exactly 20 B, op at [7] = 0xDB) — the lamp's own
+            direct GATT push on this session; its leading 3 bytes are the
+            mesh sequence number the lamp just used/heeded (drives seq
+            jumps),
+          * mesh-layer STATUS (decrypted starts with 0xC0|0x1B, len != 20)
+            — relayed by the mesh, possibly from ANY lamp: attribute via the
+            unencrypted src address in the raw frame header (raw[3:5]) mapped
+            through the registry's mesh_address, and update THAT lamp's
+            cache. This is how keepalive replies and relayed pushes — the
+            bulk of mesh traffic — keep every lamp's state fresh.
         """
+        if len(plain) == 20 and len(plain) > 7 and plain[7] == 0xDB:
+            pass  # vendor path below (own lamp)
+        elif (len(plain) != 20 and raw is not None and len(raw) >= 5):
+            src = int.from_bytes(raw[3:5], "little")
+            entry = _decode_mesh_status(plain)
+            if entry is not None:
+                mac = _mesh_src_to_mac(src)
+                target = DaemonSession._sessions.get(mac) if mac else None
+                if (target is not None and target.ctrl.client is not None
+                        and target.ctrl.client.is_connected):
+                    entry["ts"] = round(time.time(), 3)
+                    target.state_cache = entry
+                    target._push_count += 1
+                    if os.environ.get("TELINK_DEBUG_STATE"):
+                        print(f"  [{target.lamp.get('name', mac)}] mesh-status "
+                              f"src=0x{src:04x} -> {'on' if entry['on'] else 'off'} "
+                              f"bri={entry['brightness']}", flush=True)
+            return
         entry, _ = _decode_status_push(plain)
         if entry is None:
             return

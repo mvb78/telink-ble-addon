@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.9 - 2026-09-20 (mesh STATUS decode — keepalive traffic refreshes all lamps)
+- Daemon decodes mesh-layer 0x1B STATUS frames (previously discarded) and
+  attributes them via the unencrypted src address mapped through the
+  registry's mesh_address. Keepalive replies and relayed pushes — the bulk
+  of mesh traffic — now refresh every lamp's state cache, ending the false
+  staleness that paged 6× at once. Vendor frames keep precedence (same rule
+  as wait_for_opcode); unknown srcs are ignored; relayed frames never drive
+  seq jumps.
+
 ## 1.6.8 - 2026-09-20 (bounded disconnects — no more whole-daemon freezes)
 - Every `disconnect()` on a command/reconnect/keepalive path now goes
   through `_safe_disconnect()` (10 s hard timeout). A BlueZ-side hang

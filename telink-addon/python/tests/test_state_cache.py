@@ -22,10 +22,14 @@ def make_session() -> DaemonSession:
 
 
 def status_frame(on: int = 1, bri: int = 50, ct_hw: int = 0, rgb=(0, 0, 0)) -> bytes:
+    # Real vendor frames are exactly 20 B: pkt[7] = 0xDB, payload p at pkt[10:]
+    # (p[3]=ct_hw, p[5]=on flag, p[6]=bright, p[7:10]=RGB).
     head = bytes(7) + bytes([0xDB]) + bytes(2)          # pkt[7] = 0xDB, p at pkt[10]
     payload = bytes([0x10, 0, 0, ct_hw, 0, on, bri,
-                     rgb[0], rgb[1], rgb[2]]) + bytes(10)
-    return head + payload
+                     rgb[0], rgb[1], rgb[2]])
+    frame = head + payload
+    assert len(frame) == 20
+    return frame
 
 
 def test_vendor_status_on():
@@ -127,3 +131,55 @@ def test_reconcile_plan_splits_own_vs_others():
     assert remove == [32769] and add == [32768]
     remove, add = _reconcile_plan([], "68:EC:62:02:87:7C")
     assert (remove, add) == ([], [])
+
+
+def test_decode_mesh_status():
+    from telink_daemon import _decode_mesh_status
+    # decrypted mesh STATUS: [0xC0|0x1B, cw LE, ww LE, bri LE]
+    # cw=0x4000, ww=0x4000 -> warm 50; bri=64
+    pkt = bytes([0xDB, 0x00, 0x40, 0x00, 0x40, 64])
+    e = _decode_mesh_status(pkt)
+    assert e == {"on": True, "brightness": 64, "colortemp": 50, "rgb": None}, e
+    # bri 0 -> off; cw+ww 0 -> ct unknown
+    e = _decode_mesh_status(bytes([0xDB, 0, 0, 0, 0, 0]))
+    assert e["on"] is False and e["brightness"] == 0 and e["colortemp"] is None
+    # non-STATUS / vendor frames rejected
+    assert _decode_mesh_status(bytes([0xD4, 0, 0, 0, 0, 0])) is None
+    assert _decode_mesh_status(bytes(20)) is None
+    assert _decode_mesh_status(bytes([0xDB, 1, 2])) is None
+
+
+def test_mesh_src_to_mac(monkeypatch):
+    import telink_daemon
+    monkeypatch.setattr(
+        telink_daemon.registry, "load",
+        lambda: [{"mac": "AA:BB:CC:DD:EE:FF", "mesh_address": 6},
+                 {"mac": "11:22:33:44:55:66", "mesh_address": None}])
+    assert telink_daemon._mesh_src_to_mac(6) == "AA:BB:CC:DD:EE:FF"
+    assert telink_daemon._mesh_src_to_mac(99) is None
+
+
+def test_mesh_relay_updates_origin_session():
+    import types
+    from telink_daemon import DaemonSession
+    DaemonSession._sessions.clear()
+    s = make_session()  # mac AA:BB:CC:DD:EE:FF
+    s.ctrl.client = types.SimpleNamespace(is_connected=True)
+    import telink_daemon
+    orig = telink_daemon._mesh_src_to_mac
+    telink_daemon._mesh_src_to_mac = lambda src: "AA:BB:CC:DD:EE:FF" if src == 6 else None
+    try:
+        # mesh STATUS, len != 20, raw header carries src=6
+        plain = bytes([0xDB, 0x00, 0x40, 0x00, 0x40, 70])
+        raw = bytes([0, 0, 0, 6, 0]) + bytes(10)
+        s.note_plain(plain, raw)
+        assert s.state_cache["brightness"] == 70
+        assert s.state_cache["on"] is True
+        # unknown src -> ignored, own cache untouched
+        before = dict(s.state_cache)
+        telink_daemon._mesh_src_to_mac = lambda src: None
+        s.note_plain(bytes([0xDB, 0, 0, 0, 0, 10]), bytes([0, 0, 0, 9, 0]) + bytes(10))
+        assert s.state_cache["brightness"] == before["brightness"]
+    finally:
+        telink_daemon._mesh_src_to_mac = orig
+        DaemonSession._sessions.clear()

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.9 - 2026-09-20 (mesh STATUS decode)
+- `_decode_mesh_status` + `_mesh_src_to_mac`: mesh-layer 0x1B frames update
+  the origin lamp's cache (unit-tested). Vendor precedence preserved.
+
 ## 1.6.8 - 2026-09-20 (bounded disconnects)
 - `_safe_disconnect()` (10 s timeout) on all lock-holding paths: a hung
   BlueZ disconnect can no longer freeze the daemon's command path.
