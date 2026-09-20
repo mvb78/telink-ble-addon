@@ -18,6 +18,21 @@ DEFAULT_PORT = 8098
 DEFAULT_POLL_INTERVAL_SECONDS = 30
 MIN_POLL_INTERVAL_SECONDS = 5
 
+# Split polling (fast truth, cheap BLE bill): the coordinator refreshes every
+# FAST_POLL_SECONDS with cheap reads (lamp/group lists over REST, daemon
+# state cache over TCP — all memory-speed, no BLE traffic). The expensive
+# bulk BLE status query + daemon liveness run at most every
+# SLOW_STATUS_SECONDS.
+FAST_POLL_SECONDS = 10
+SLOW_STATUS_SECONDS = 90
+
+# Staleness watchdog: a lamp whose daemon push cache is older than this
+# (while the daemon reports running) pages the user via a persistent
+# notification instead of failing silently. Re-notify at most every hour
+# per lamp; notifications auto-dismiss on recovery.
+STALE_AFTER_SECONDS = 15 * 60
+STALE_RENOTIFY_SECONDS = 60 * 60
+
 # Add-on API
 API_LAMPS = "/api/lamps"
 API_GROUPS = "/api/groups"

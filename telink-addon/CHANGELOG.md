@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.2 - 2026-09-20 (state-cache ts = last seen)
+- `note_plain` refreshes ts on every decoded push (even identical), so
+  steady lamps stay fresh for the HA staleness watchdog.
+
 ## 1.6.1 - 2026-09-20 (kill the reconnect-scan cascade)
 - Global adapter lock: all BLE ops across sessions serialize on one lock;
   concurrent scans no longer kill neighbor links.

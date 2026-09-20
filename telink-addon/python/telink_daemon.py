@@ -140,9 +140,15 @@ class DaemonSession:
         }
         entry["ts"] = round(time.time(), 3)
         old = self.state_cache
-        if old and {k: v for k, v in old.items() if k != "ts"} == entry:
-            return
+        # Always refresh: ts means last-SEEN push (liveness), not last change.
+        # A steady lamp pushes identical state on every keepalive; without a
+        # ts refresh the HA-side staleness watchdog would false-positive on
+        # healthy-but-quiet lamps.
+        changed = (not old
+                   or {k: v for k, v in old.items() if k != "ts"} != entry)
         self.state_cache = entry
+        if not changed:
+            return
         if os.environ.get("TELINK_DEBUG_STATE"):
             print(f"  [{self.lamp.get('name', self.lamp['mac'])}] state -> "
                   f"{'on' if entry['on'] else 'off'} bri={bri}", flush=True)

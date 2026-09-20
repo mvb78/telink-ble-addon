@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -34,6 +35,10 @@ from .const import (
     DEFAULT_DAEMON_PORT,
     DEFAULT_POLL_INTERVAL_SECONDS,
     DOMAIN,
+    FAST_POLL_SECONDS,
+    SLOW_STATUS_SECONDS,
+    STALE_AFTER_SECONDS,
+    STALE_RENOTIFY_SECONDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -65,7 +70,13 @@ def _common_member_colortemp(on_members: list[dict]) -> int | None:
 
 
 class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Poll lamps, groups and their combined status from the add-on."""
+    """Poll lamps, groups and their combined status from the add-on.
+
+    Split polling: fast cycle (FAST_POLL_SECONDS) refreshes lamp/group lists
+    and the daemon's memory-speed state cache; the expensive bulk BLE status
+    query runs at most every SLOW_STATUS_SECONDS. A staleness watchdog pages
+    via persistent_notification when a lamp stops pushing.
+    """
 
     def __init__(self, hass: HomeAssistant, base_url: str, poll_interval: int,
                  session: aiohttp.ClientSession, daemon_port: int | None = None):
@@ -73,11 +84,13 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=max(poll_interval, 5)),
+            update_interval=timedelta(seconds=FAST_POLL_SECONDS),
         )
         self._base_url = base_url.rstrip("/")
         self._session = session
         self._daemon_port = daemon_port or DEFAULT_DAEMON_PORT
+        self._last_slow_poll: float = 0.0
+        self._stale_notified: dict[str, float] = {}
 
     # -- low-level requests -------------------------------------------------
     async def _request(
@@ -180,16 +193,18 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return None
 
     async def _async_update_data(self) -> dict[str, Any]:
-        # Individual add-on endpoints may fail (or hang) when the Telink lamps
-        # are asleep / not advertising. Rather than fail the whole update (which
-        # would trip the config entry into setup_retry), degrade gracefully:
-        # keep last-known lamps/groups and mark entities unavailable. All four
-        # requests run concurrently so a poll costs ~the slowest one, not the sum.
+        # Split polling: every cycle refreshes the cheap reads (lamp/group
+        # lists over REST, daemon state cache over TCP — all memory-speed).
+        # The expensive bulk BLE status query runs at most every
+        # SLOW_STATUS_SECONDS. Individual endpoints may fail; degrade
+        # gracefully and keep last-known values instead of wedging the
+        # coordinator into setup_retry.
         lamps = (self.data or {}).get("lamps", [])
         groups = (self.data or {}).get("groups", [])
         connected = (self.data or {}).get("connected", False)
         by_mac: dict[str, dict] = {}
         cached_state = (self.data or {}).get("cached_state") or {}
+        slow_due = (time.monotonic() - self._last_slow_poll) >= SLOW_STATUS_SECONDS
 
         async def _fetch_lamps():
             nonlocal lamps
@@ -206,6 +221,10 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 _LOGGER.debug("Telink groups fetch failed; keeping last-known")
 
         async def _fetch_status():
+            if not slow_due:
+                # Reuse last slow-poll results (kept in self.data).
+                by_mac.update((self.data or {}).get("status") or {})
+                return
             try:
                 statuses = await self.get_status_all()
                 for item in statuses:
@@ -213,6 +232,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     mac = item.get("mac")
                     if mac and isinstance(entry, dict):
                         by_mac[mac.lower()] = entry
+                self._last_slow_poll = time.monotonic()
             except UpdateFailed:
                 _LOGGER.debug("Telink status poll failed; lamps likely offline")
 
@@ -257,6 +277,8 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                      if m.lower() not in cached_state],
                 }
 
+        await self._check_stale_lamps(lamps, cached_state, connected)
+
         return {
             "lamps": lamps,
             "groups": groups,
@@ -265,3 +287,57 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "cached_state": cached_state,
             "group_states": group_states,
         }
+
+    async def _check_stale_lamps(self, lamps: list[dict],
+                                 cached_state: dict[str, Any],
+                                 connected: bool) -> None:
+        """Page via persistent_notification when a lamp stops pushing.
+
+        A lamp whose daemon push cache is older than STALE_AFTER_SECONDS
+        (while the daemon reports running) is either silent on the mesh or
+        has a zombie session — exactly the class that used to fail silently
+        for hours. Rate-limited per lamp; auto-dismissed on recovery. Never
+        raises: the watchdog must not break polling.
+        """
+        try:
+            # NOTE: daemon cache "ts" is wall-clock epoch (time.time()), so
+            # the comparison must use time.time(), not monotonic().
+            now = time.time()
+            for lamp in lamps or []:
+                mac = str(lamp.get("mac", "")).upper()
+                if not mac:
+                    continue
+                st = (cached_state or {}).get(mac.lower()) or {}
+                try:
+                    ts = float(st.get("ts") or 0)
+                except (TypeError, ValueError):
+                    ts = 0.0
+                stale = connected and ((not ts) or (now - ts > STALE_AFTER_SECONDS))
+                last = self._stale_notified.get(mac, 0.0)
+                if stale:
+                    if now - last < STALE_RENOTIFY_SECONDS:
+                        continue
+                    self._stale_notified[mac] = now
+                    _LOGGER.warning(
+                        "Telink lamp %s (%s) has no fresh push for >%ds; "
+                        "check power/advertising",
+                        lamp.get("name", mac), mac, STALE_AFTER_SECONDS)
+                    await self.hass.services.async_call(
+                        "persistent_notification", "create",
+                        {"notification_id": f"telink_stale_{mac.replace(':', '')}",
+                         "title": "Telink lamp silent",
+                         "message": (
+                             f"{lamp.get('name', mac)} ({mac}) has not pushed "
+                             f"state for over {STALE_AFTER_SECONDS // 60} min. "
+                             f"Check that it is powered and advertising; the "
+                             f"daemon reconnects automatically.")},
+                        blocking=False)
+                elif mac in self._stale_notified:
+                    del self._stale_notified[mac]
+                    with contextlib.suppress(Exception):
+                        await self.hass.services.async_call(
+                            "persistent_notification", "dismiss",
+                            {"notification_id": f"telink_stale_{mac.replace(':', '')}"},
+                            blocking=False)
+        except Exception:  # noqa: BLE001 — watchdog is best-effort
+            _LOGGER.debug("Telink staleness check failed", exc_info=True)

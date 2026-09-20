@@ -58,6 +58,20 @@ def test_mesh_layer_frame_ignored():
     assert s.state_cache is None                     # only vendor frames cached
 
 
+def test_ts_refreshes_on_identical_push():
+    # ts = last-SEEN push (liveness), not last change: a steady lamp that
+    # pushes identical state on every keepalive must stay fresh, or the
+    # HA-side staleness watchdog false-positives on healthy lamps.
+    import time
+    s = make_session()
+    s.note_plain(status_frame())
+    first_ts = s.state_cache["ts"]
+    time.sleep(0.01)
+    s.note_plain(status_frame())
+    assert s.state_cache["ts"] >= first_ts
+    assert s.state_cache["brightness"] == 50
+
+
 def test_byte_clustered_no_raise_short_frame():
     s = make_session()
     s.note_plain(bytes(10))                          # no op, no payload

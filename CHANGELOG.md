@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.6.2 - 2026-09-20 (state-cache ts = last seen, not last change)
+- Daemon `note_plain` always refreshes the push timestamp, even for
+  byte-identical state. Previously ts only moved on change, so steady lamps
+  looked 2.5 h stale and the new HA staleness watchdog false-positived on
+  healthy sessions. ts now means liveness (last decoded push).
+
 ## 1.6.1 - 2026-09-20 (kill the reconnect-scan cascade)
 - **Global adapter lock**: every BLE operation (scan, connect, write, GATT
   read) across all sessions now serializes on one lock. Previously each
