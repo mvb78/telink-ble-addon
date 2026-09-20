@@ -200,9 +200,22 @@ class DaemonSession:
                   f"{'on' if entry['on'] else 'off'} bri={entry['brightness']}", flush=True)
 
     async def start(self):
+        # Hard-bounded: BlueZ GATT ops inside login() carry no timeout of
+        # their own; a wedged adapter/lamp can hang them forever, which used
+        # to stall the whole initial connect behind a single lamp.
         async with _ADAPTER_LOCK:
-            await self.ctrl.connect()
-            await self.ctrl.login()
+            try:
+                await asyncio.wait_for(self._start_inner(), timeout=60.0)
+            except asyncio.TimeoutError:
+                try:
+                    await self.ctrl.disconnect()
+                except Exception:
+                    pass
+                raise Exception(f"{self.lamp['mac']} start timed out (BLE stack hung)")
+
+    async def _start_inner(self):
+        await self.ctrl.connect()
+        await self.ctrl.login()
         self._last_cmd_time = asyncio.get_event_loop().time()
         self._keepalive_task = asyncio.get_event_loop().create_task(
             self._keepalive_loop()
