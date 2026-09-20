@@ -14,6 +14,7 @@ Lamp units (tunable white only — verified on hardware):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -200,13 +201,21 @@ class TelinkLampLight(_TelinkBaseLight):
 
 
 class TelinkGroupLight(_TelinkBaseLight):
-    """A mesh group, controlled via a single packet to the group address.
+    """A mesh group that acts as ONE lamp.
 
-    The mesh does not expose read-back for group addresses, but every member
-    lamp pushes its 0xDB status through its own daemon session — the
-    coordinator composes real group state from those caches. The entity is
-    only an assumed-state entity while no member state is known.
+    Control goes out as a single mesh broadcast to the group address (fast
+    path — most members follow at once), then member states from the daemon
+    push cache are compared against the target and any drifted member gets a
+    direct unicast re-send (bounded). The entity therefore converges to one
+    uniform on/brightness/colortemp across all 3 members instead of showing
+    a mixed mesh.
     """
+
+    # Tolerances when comparing member push state to the commanded target
+    # (add-on units: brightness 0-100, colortemp warm% 0-100).
+    _SYNC_BRI_TOL = 3
+    _SYNC_CT_TOL = 4
+    _SYNC_ROUNDS = 2
 
     def __init__(self, coordinator: TelinkCoordinator, group: dict):
         super().__init__(coordinator, group)
@@ -214,6 +223,7 @@ class TelinkGroupLight(_TelinkBaseLight):
         self._name = group["name"]
         self._attr_unique_id = f"telink_ble_group_{self._addr}"
         self._attr_name = f"Telink {self._name}"
+        self._members = [str(m).upper() for m in (group.get("lamps") or [])]
         self._on = False
         self._brightness: int | None = None
         self._color_temp_kelvin: int | None = None
@@ -241,6 +251,9 @@ class TelinkGroupLight(_TelinkBaseLight):
 
     @property
     def color_temp_kelvin(self) -> int | None:
+        state = self._group_state
+        if state is not None and state.get("colortemp") is not None:
+            return warm_pct_to_kelvin(int(state["colortemp"]))
         return self._color_temp_kelvin
 
     @property
@@ -263,12 +276,66 @@ class TelinkGroupLight(_TelinkBaseLight):
         self._on = True
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
+        await self._sync_members(on=True, brightness_ha=self._brightness,
+                                 kelvin=self._color_temp_kelvin)
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.send_command(API_CMD_SET, {"dst": self._addr, "on": False})
         self._on = False
         self.async_write_ha_state()
         await self.coordinator.async_request_refresh()
+        await self._sync_members(on=False)
+        self.async_write_ha_state()
+
+    async def _sync_members(self, *, on: bool, brightness_ha: int | None = None,
+                            kelvin: int | None = None) -> None:
+        """Force every member lamp to the commanded group state.
+
+        Compares each member's daemon push cache against the target and
+        re-sends a direct unicast to drifted members. Bounded to
+        _SYNC_ROUNDS so a dead lamp can't stall the service call.
+        """
+        if not self._members:
+            return
+        target_bri = (brightness_ha_to_val(int(brightness_ha))
+                      if brightness_ha is not None else None)
+        target_ct = kelvin_to_warm_pct(int(kelvin)) if kelvin is not None else None
+        for _ in range(self._SYNC_ROUNDS):
+            cached = (self.coordinator.data or {}).get("cached_state") or {}
+            drifted: list[str] = []
+            for mac in self._members:
+                st = cached.get(mac.lower())
+                if not st or st.get("unknown"):
+                    continue  # no truth for this member — leave it alone
+                if not on:
+                    if st.get("on"):
+                        drifted.append(mac)
+                    continue
+                ok_b = (target_bri is None
+                        or abs(int(st.get("brightness") or 0) - target_bri) <= self._SYNC_BRI_TOL)
+                ok_c = (target_ct is None or st.get("colortemp") is None
+                        or abs(int(st.get("colortemp")) - target_ct) <= self._SYNC_CT_TOL)
+                if not (st.get("on") and ok_b and ok_c):
+                    drifted.append(mac)
+            if not drifted:
+                return
+            _LOGGER.debug("Telink group %s: re-syncing drifted members %s",
+                          self._name, drifted)
+            for mac in drifted:
+                payload: dict[str, Any] = {"mac": mac, "on": on}
+                if on:
+                    if brightness_ha is not None:
+                        payload["brightness"] = brightness_ha_to_val(int(brightness_ha))
+                    if kelvin is not None:
+                        payload["colortemp"] = kelvin_to_warm_pct(int(kelvin))
+                try:
+                    await self.coordinator.send_command(API_CMD_SET, payload)
+                except Exception as err:  # noqa: BLE001 — one dead lamp must not fail the group
+                    _LOGGER.warning("Telink group %s: member %s re-sync failed: %s",
+                                    self._name, mac, err)
+            await asyncio.sleep(2)
+            await self.coordinator.async_request_refresh()
 
     @callback
     def _handle_coordinator_update(self) -> None:

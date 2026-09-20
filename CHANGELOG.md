@@ -1,5 +1,12 @@
 # Changelog
 
+## Integration 1.3.0 - 2026-09-20 (group acts as one lamp)
+- `TelinkGroupLight` now enforces uniform member state: after the group
+  broadcast it compares every member's daemon push cache against the
+  commanded on/brightness/colortemp and re-sends direct unicasts to drifted
+  members (bounded rounds, dead lamps logged not fatal). A group command
+  converges all 3 lamps instead of leaving a mixed mesh.
+
 ## 1.6.0 - 2026-09-20 (dedicated Bluetooth dongle, exclusive use)
 - **Adapter pinning (`TELINK_HCI_ADAPTER`, add-on option `hci_adapter`)**:
   every bleak scanner/client + the raw HCI monitor now bind to ONE adapter

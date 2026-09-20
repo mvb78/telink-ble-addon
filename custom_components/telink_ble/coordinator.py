@@ -43,6 +43,27 @@ def _as_bool(value: Any) -> bool:
     return str(value).lower() in ("1", "true", "yes", "on")
 
 
+def _common_member_colortemp(on_members: list[dict]) -> int | None:
+    """Most common colortemp (warm%) across members with known state.
+
+    After a group command all members converge to the same value, so the
+    mode is the group's color temperature. Returns None when unknown.
+    """
+    counts: dict[int, int] = {}
+    for s in on_members:
+        ct = s.get("colortemp")
+        if ct is None:
+            continue
+        try:
+            ct = int(ct)
+        except (TypeError, ValueError):
+            continue
+        counts[ct] = counts.get(ct, 0) + 1
+    if not counts:
+        return None
+    return max(counts, key=lambda c: (counts[c], -abs(c - 50)))
+
+
 class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Poll lamps, groups and their combined status from the add-on."""
 
@@ -231,6 +252,7 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 group_states[addr] = {
                     "on": any(s.get("on") for s in on_members),
                     "brightness": max((s.get("brightness") or 0) for s in on_members),
+                    "colortemp": _common_member_colortemp(on_members),
                     "unknown_mask": [m for m in members
                                      if m.lower() not in cached_state],
                 }
