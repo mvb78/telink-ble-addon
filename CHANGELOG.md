@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.3 - 2026-09-20 (actuation confirmation + pre-emptive seq bump)
+- Daemon `send()` now confirms actuation, not just link liveness: after a
+  verified unicast write to the session's own lamp it waits up to
+  `TELINK_PUSH_WAIT_S` (3 s) for the lamp's 0xDB push; silence raises so
+  the existing reconnect+retry path runs instead of reporting phantom ok.
+- Pre-emptive seq jump (`TELINK_SEQ_BUMP`, +0x1000) when the last decoded
+  push is older than `TELINK_PUSH_STALE_S` (5 min): forward jumps are always
+  accepted, closing the circular stale-seq trap (no pushes -> no sno to
+  learn from -> sends dropped as duplicates -> still no pushes).
+
 ## 1.6.2 - 2026-09-20 (state-cache ts = last seen, not last change)
 - Daemon `note_plain` always refreshes the push timestamp, even for
   byte-identical state. Previously ts only moved on change, so steady lamps

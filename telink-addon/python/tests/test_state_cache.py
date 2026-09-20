@@ -95,3 +95,19 @@ def test_seq_never_rewinds():
     ahead = s.ctrl.seq_manager.seq
     s.note_plain(status_frame(), raw=(0x0005).to_bytes(3, "little") + status_frame()[:17])
     assert s.ctrl.seq_manager.seq == ahead
+
+
+def test_maybe_bump_seq_when_push_stale():
+    import time as _t
+    from telink_daemon import _SEQ_BUMP
+    s = make_session()
+    before = s.ctrl.seq_manager.seq
+    # fresh push -> no bump
+    s.note_plain(status_frame())
+    s._maybe_bump_seq()
+    assert s.ctrl.seq_manager.seq == before
+    # stale push -> forward jump
+    s.state_cache["ts"] = _t.time() - 3600
+    s._maybe_bump_seq()
+    assert s.ctrl.seq_manager.seq > before
+    assert s.ctrl.seq_manager.seq - before <= _SEQ_BUMP + 2

@@ -61,6 +61,17 @@ IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 # is alive; on failure we reconnect and re-send within the same command call.
 _LINK_VERIFY_TIMEOUT = float(os.environ.get("TELINK_LINK_VERIFY_TIMEOUT", "8"))
 _SEND_ATTEMPTS = 2  # reconnect cycles allowed within one send()
+# Actuation confirmation: after a verified unicast send to the session's own
+# lamp, wait this long for a state push reflecting the command. No push =
+# the packet was dropped (stale seq vs the lamp's dedupe window) or the
+# lamp-side session is wedged — both fixed by reconnect + retry.
+_PUSH_WAIT_S = float(os.environ.get("TELINK_PUSH_WAIT_S", "3.0"))
+# If the last decoded push is older than this, the lamp may have advanced
+# its seq counter without us seeing it (no pushes observed to learn from).
+# Bump our counter forward pre-emptively so the send isn't dropped as a
+# duplicate. Forward jumps are always accepted; only rewinds are rejected.
+_PUSH_STALE_S = float(os.environ.get("TELINK_PUSH_STALE_S", "300"))
+_SEQ_BUMP = int(os.environ.get("TELINK_SEQ_BUMP", "0x1000"), 0)
 
 # Global adapter lock: every BLE operation (scan, connect, write, GATT read)
 # across ALL sessions serializes here. The sidecar drives one radio (hci1);
@@ -92,6 +103,10 @@ class DaemonSession:
         # via other proxies). Semantics per lamp_registryś 1.3.0 fix: a lamp
         # always reports state ON; real off = brightness 0.
         self.state_cache: dict | None = None
+        # Monotonic push counter (bumped in note_plain on every decoded
+        # status push). Lets send() detect "verified link, but the lamp
+        # never actuated" by watching for a fresh push after the write.
+        self._push_count: int = 0
         self._lock = asyncio.Lock()
         self._keepalive_task: asyncio.Task | None = None
 
@@ -147,6 +162,7 @@ class DaemonSession:
         changed = (not old
                    or {k: v for k, v in old.items() if k != "ts"} != entry)
         self.state_cache = entry
+        self._push_count += 1
         if not changed:
             return
         if os.environ.get("TELINK_DEBUG_STATE"):
@@ -210,10 +226,13 @@ class DaemonSession:
                         self._keepalive_task = asyncio.get_event_loop().create_task(
                             self._keepalive_loop()
                         )
+                    self._maybe_bump_seq()
+                    push_before = self._push_count
                     await self.ctrl.send_command(opcode, params, address)
                     await asyncio.sleep(0.2)
                     await self.ctrl.send_command(opcode, params, address)
                     await self._read_status_char()  # liveness proof
+                    await self._confirm_push(push_before, opcode, params, address)
                     self._last_cmd_time = asyncio.get_event_loop().time()
                     try:
                         registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
@@ -235,6 +254,56 @@ class DaemonSession:
                             last_error = reconnect_error
             assert last_error is not None
             raise last_error
+
+    def _maybe_bump_seq(self) -> None:
+        """Pre-emptive seq jump when our counter may lag the lamp's.
+
+        If no status push was decoded for a long time we have no recent
+        knowledge of the lamp's counter — and the lamp may have advanced it
+        via other traffic. Our next write would then be dropped as a
+        duplicate inside its ±0x3F dedupe window. A forward jump is always
+        accepted (only rewinds are rejected), so bump ahead proactively.
+        """
+        st = self.state_cache
+        if not st or not st.get("ts"):
+            return
+        if time.time() - float(st["ts"]) < _PUSH_STALE_S:
+            return
+        ours = self.ctrl.seq_manager.seq
+        self.ctrl.seq_manager = SequenceManager(initial=(ours + _SEQ_BUMP) & 0xFFFFFF)
+        try:
+            registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
+            self.lamp["last_seq"] = self.ctrl.seq_manager.seq
+        except Exception:
+            pass
+        print(f"  [{self.lamp.get('name', self.lamp['mac'])}] seq pre-bump "
+              f"{ours} -> {self.ctrl.seq_manager.seq} (push stale)", flush=True)
+
+    async def _confirm_push(self, push_before: int, opcode: int, params: bytes,
+                            address: int) -> None:
+        """Wait briefly for the lamp's actuation push after a verified send.
+
+        Only meaningful for unicast writes to this session's own lamp
+        (address == its mesh address): a processed write is always followed
+        by a 0xDB push. No push within the window means the packet was
+        dropped (stale seq) or the lamp-side session is wedged — raise so
+        send() reconnects and retries instead of reporting phantom success.
+        """
+        own_addr = self.lamp.get("mesh_address")
+        try:
+            own_addr = int(own_addr) if own_addr is not None else None
+        except (TypeError, ValueError):
+            own_addr = None
+        if own_addr is None or int(address) != own_addr:
+            return
+        deadline = asyncio.get_event_loop().time() + _PUSH_WAIT_S
+        while asyncio.get_event_loop().time() < deadline:
+            if self._push_count != push_before:
+                return
+            await asyncio.sleep(0.2)
+        raise TimeoutError(
+            f"no actuation push from {self.lamp['mac']} within {_PUSH_WAIT_S}s "
+            f"(op={opcode:#04x}); packet likely dropped")
 
     async def drain(self, duration: float = 0.5):
         """Clear stale notifications from this session's queue without acting on them."""

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.3 - 2026-09-20 (actuation confirmation)
+- Verified sends now wait for the lamp's actuation push (unicast to own
+  lamp); silence triggers reconnect+retry instead of phantom success.
+- Stale-push sessions pre-bump their seq counter forward (always accepted).
+
 ## 1.6.2 - 2026-09-20 (state-cache ts = last seen)
 - `note_plain` refreshes ts on every decoded push (even identical), so
   steady lamps stay fresh for the HA staleness watchdog.
