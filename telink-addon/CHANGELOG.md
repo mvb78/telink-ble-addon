@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.1 - 2026-09-20 (kill the reconnect-scan cascade)
+- Global adapter lock: all BLE ops across sessions serialize on one lock;
+  concurrent scans no longer kill neighbor links.
+- Per-lamp reconnect backoff (15s doubling, 300s cap).
+
 ## 1.6.0 - 2026-09-20 (dedicated Bluetooth dongle)
 - Adapter pinning (`TELINK_HCI_ADAPTER` / add-on option `hci_adapter`):
   every scanner, client and the raw HCI monitor bind to one adapter only

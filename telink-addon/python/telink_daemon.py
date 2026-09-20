@@ -62,6 +62,23 @@ IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 _LINK_VERIFY_TIMEOUT = float(os.environ.get("TELINK_LINK_VERIFY_TIMEOUT", "8"))
 _SEND_ATTEMPTS = 2  # reconnect cycles allowed within one send()
 
+# Global adapter lock: every BLE operation (scan, connect, write, GATT read)
+# across ALL sessions serializes here. The sidecar drives one radio (hci1);
+# parallel BleakScanner/connect traffic from concurrent sessions disrupts
+# live neighbor links, causing the reconnect-scan cascades that wedged the
+# mesh for minutes (each scan steals adapter airtime from the other five
+# sessions). Always acquired as a LEAF (after any session lock, never before)
+# so lock ordering is deadlock-free.
+_ADAPTER_LOCK = asyncio.Lock()
+
+# Reconnect backoff for missing lamps: base seconds, doubled per consecutive
+# failure, capped. A lamp that is genuinely powered off must not trigger a
+# full multi-second adapter scan every cycle.
+_RECONNECT_BASE_S = 15.0
+_RECONNECT_MAX_S = 300.0
+_reconnect_fails: dict[str, int] = {}
+_reconnect_backoff: dict[str, float] = {}
+
 
 class DaemonSession:
     def __init__(self, lamp: dict):
@@ -131,8 +148,9 @@ class DaemonSession:
                   f"{'on' if entry['on'] else 'off'} bri={bri}", flush=True)
 
     async def start(self):
-        await self.ctrl.connect()
-        await self.ctrl.login()
+        async with _ADAPTER_LOCK:
+            await self.ctrl.connect()
+            await self.ctrl.login()
         self._last_cmd_time = asyncio.get_event_loop().time()
         self._keepalive_task = asyncio.get_event_loop().create_task(
             self._keepalive_loop()
@@ -170,8 +188,13 @@ class DaemonSession:
         dead links), so after sending we do a status-char read. On failure
         (send or read) we reconnect and retry, up to _SEND_ATTEMPTS cycles.
         Raises on final failure so callers see ok=false instead of silence.
+
+        The whole attempt sequence holds the global adapter lock: this
+        session's scan/connect/write/read traffic must never overlap another
+        session's, or the adapter scan steals airtime and kills neighbor
+        links (reconnect-scan cascade).
         """
-        async with self._lock:
+        async with self._lock, _ADAPTER_LOCK:
             last_error: Exception | None = None
             for attempt in range(1, _SEND_ATTEMPTS + 1):
                 try:
@@ -217,7 +240,7 @@ class DaemonSession:
     async def query(self, opcode: int, params: bytes, response_opcode: int,
                     timeout: float = 4.0) -> bytes | None:
         """Send a query command over this session and return the matching decrypted response."""
-        async with self._lock:
+        async with self._lock, _ADAPTER_LOCK:
             if not self.ctrl.client or not self.ctrl.client.is_connected:
                 await self._reconnect(spawn_keepalive=False)
             # Drop queued/stale notifications so we only read fresh responses.
@@ -242,7 +265,7 @@ class DaemonSession:
         can read the lamp's current state directly without needing the HCI
         monitor (which is unavailable inside the add-on container).
         """
-        async with self._lock:
+        async with self._lock, _ADAPTER_LOCK:
             if not self.ctrl.client or not self.ctrl.client.is_connected:
                 await self._reconnect(spawn_keepalive=False)
             data = await self.ctrl.client.read_gatt_char(CHAR_STATUS_UUID)
@@ -250,6 +273,9 @@ class DaemonSession:
             return bytes(data)
 
     async def _reconnect(self, spawn_keepalive: bool = True):
+        # NOTE: the caller must already hold the global adapter lock OR the
+        # session lock (all current callers do); _ADAPTER_LOCK is always a
+        # leaf here, so lock ordering stays deadlock-free.
         saved_seq = self.ctrl.seq_manager
         try:
             await self.ctrl.disconnect()
@@ -284,7 +310,7 @@ class DaemonSession:
             if idle < _KEEPALIVE_INTERVAL:
                 continue
             try:
-                async with self._lock:
+                async with self._lock, _ADAPTER_LOCK:
                     if not self.ctrl.client or not self.ctrl.client.is_connected:
                         await self._reconnect(spawn_keepalive=False)
                         continue
@@ -571,18 +597,33 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                         next_reconnect = now + 15.0
                         for lamp in missing:
                             mac = lamp["mac"].upper()
+                            # Per-lamp backoff: a powered-off lamp must not
+                            # trigger a multi-second adapter scan every cycle.
+                            # Skip until its personal retry time arrives.
+                            retry_at = _reconnect_backoff.get(mac, 0.0)
+                            if now < retry_at:
+                                continue
                             print(f"Reconnecting missing lamp {mac} ...", flush=True)
                             sess = DaemonSession(lamp)
                             try:
-                                await sess.start()
+                                async with _ADAPTER_LOCK:
+                                    await sess.start()
                                 sessions[mac] = sess
+                                _reconnect_backoff.pop(mac, None)
                                 print(f"  [{lamp['name']}] reconnected", flush=True)
                             except Exception as e:
                                 try:
                                     await sess.stop()
                                 except Exception:
                                     pass
-                                print(f"  [{lamp['name']}] reconnect failed: {e}", flush=True)
+                                fails = _reconnect_fails.get(mac, 0) + 1
+                                _reconnect_fails[mac] = fails
+                                wait = min(_RECONNECT_BASE_S * (2 ** (fails - 1)),
+                                           _RECONNECT_MAX_S)
+                                _reconnect_backoff[mac] = (
+                                    asyncio.get_event_loop().time() + wait)
+                                print(f"  [{lamp['name']}] reconnect failed: {e} "
+                                      f"(retry in {wait:.0f}s)", flush=True)
                         last_sig = _lamps_signature()
 
 

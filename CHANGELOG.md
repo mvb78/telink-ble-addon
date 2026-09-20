@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.1 - 2026-09-20 (kill the reconnect-scan cascade)
+- **Global adapter lock**: every BLE operation (scan, connect, write, GATT
+  read) across all sessions now serializes on one lock. Previously each
+  session ran its scans/connects concurrently on the single radio — one
+  session's reconnect scan stole adapter airtime and killed neighbor links,
+  which triggered their reconnects, which killed more links. That cascade
+  is why links died every few minutes all day.
+- **Reconnect backoff per lamp** (15 s → 300 s cap): a genuinely powered-off
+  lamp no longer triggers a multi-second adapter scan every cycle.
+
 ## Integration 1.3.0 - 2026-09-20 (group acts as one lamp)
 - `TelinkGroupLight` now enforces uniform member state: after the group
   broadcast it compares every member's daemon push cache against the
