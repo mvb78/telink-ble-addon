@@ -19,7 +19,7 @@ import os
 from bleak import BleakClient, BleakScanner
 from Crypto.Cipher import AES
 
-from config import CHAR_PAIR_UUID, CHAR_COMMAND_UUID
+from config import CHAR_PAIR_UUID, CHAR_COMMAND_UUID, HCI_ADAPTER
 from telink_crypto import (derive_base_key, build_challenge, verify_sample_s,
                            get_session_key, java_aes, build_delete_pairing_frame)
 
@@ -209,13 +209,13 @@ async def main():
     mac_bytes = bytes.fromhex(mac.replace(":", ""))
 
     print(f"Scanning for {mac} ...")
-    device = await BleakScanner.find_device_by_address(mac, timeout=15)
+    device = await BleakScanner.find_device_by_address(mac, timeout=15, adapter=HCI_ADAPTER)
     if not device:
         print("Device not found.")
         return
 
     print(f"Found {device.name} ({device.address}), connecting ...")
-    async with BleakClient(device.address) as client:
+    async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
         session_key = await apk_login(client, args.current_name, args.current_password)
 
         print(f"  Setting mesh address to {args.mesh_address} ...")

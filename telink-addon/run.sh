@@ -21,6 +21,7 @@ export TELINK_WEB_DEBUG=0
 # CONFIG_<OPTION> env vars; the python package reads TELINK_* instead. Map them.
 [ -n "${CONFIG_KNOWN_PASSWORDS:-}" ] && export TELINK_KNOWN_PASSWORDS="${CONFIG_KNOWN_PASSWORDS}"
 [ -n "${CONFIG_SCAN_TIMEOUT:-}" ] && export TELINK_SCAN_TIMEOUT="${CONFIG_SCAN_TIMEOUT}"
+[ -n "${CONFIG_HCI_ADAPTER:-}" ] && export TELINK_HCI_ADAPTER="${CONFIG_HCI_ADAPTER}"
 # Variant B: when daemon_host is configured the BLE daemon runs in a privileged
 # sidecar container; this add-on only serves the web UI and bridges to it.
 [ -n "${CONFIG_DAEMON_HOST:-}" ] && export TELINK_DAEMON_HOST="${CONFIG_DAEMON_HOST}"

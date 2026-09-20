@@ -117,9 +117,14 @@ The daemon keeps **permanent BLE connections** to every lamp (verified sends,
 health-check keepalive, push-driven state cache). For stable control the
 radio must be effectively **exclusive to the daemon**:
 
-- **Exclusive adapter is enough** — the daemon holds one connection per lamp
-  through the host's `hci0`; disable Home Assistant's own Bluetooth scanner
-  (Settings → Devices → *Realtek Bluetooth Radio* → disable) so its passive
+- **Two adapters (recommended layout)**: set `hci_adapter: "hci1"` (add-on
+  option) / `TELINK_HCI_ADAPTER=hci1` (sidecar/docker) to pin every bleak
+  scanner, client AND the raw HCI monitor to the dedicated USB dongle
+  (e.g. ASUS USB-BT500). Keep Home Assistant's own Bluetooth on the internal
+  adapter — no radio contention by construction. Leave it unset for
+  single-adapter hosts (bleak default behavior).
+- **One adapter only (minimum)**: disable Home Assistant's own Bluetooth
+  scanner (Settings → Devices → the adapter entry → disable) so its passive
   scans don't compete for adapter airtime with lamp commands.
 - **A second USB dongle is the cleaner layout** if you also want HA's BLE
   tracking (BLE sensors, BT proxies' partners etc.) running in parallel.

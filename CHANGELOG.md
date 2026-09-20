@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.6.0 - 2026-09-20 (dedicated Bluetooth dongle, exclusive use)
+- **Adapter pinning (`TELINK_HCI_ADAPTER`, add-on option `hci_adapter`)**:
+  every bleak scanner/client + the raw HCI monitor now bind to ONE adapter
+  only. On this box `hci1` = ASUS USB-BT500 (RTL8761B, BT5.0, USB-only);
+  HA keeps its own Bluetooth on the internal `hci0` combo chip → the Telink
+  mesh no longer shares a radio with anything (verified better signal path
+  and no contention).
+- Unset/empty keeps the old bleak-default behavior (safe single-adapter
+  installs), so nothing changes for other users.
+
 ## 1.5.0 - 2026-09-19 (group reliability — lab findings, 3+3 mesh)
 - **Discovery scan 45 s → 60 s** (default). Lab proved in-mesh Telink lamps
   advertise ~15–20× slower than unprovisioned ones; 20–45 s scans miss them,

@@ -13,7 +13,19 @@ from config import (
     CHAR_PAIR_UUID,
     KNOWN_PASSWORDS,
     VENDOR_ID,
+    HCI_ADAPTER,
+    hci_adapter_index,
 )
+
+
+def scanner_kwargs() -> dict:
+    """bleak scanner kwargs pinned to the exclusive adapter (if configured)."""
+    return {"adapter": HCI_ADAPTER} if HCI_ADAPTER else {}
+
+
+def client_kwargs() -> dict:
+    """bleak client kwargs pinned to the exclusive adapter (if configured)."""
+    return {"adapter": HCI_ADAPTER} if HCI_ADAPTER else {}
 # CHAR_NOTIFY_UUID (0d1911): lamp sends ATT_NOTIFY (opcode 0x1b) at handle 0x0012
 # automatically after commands, WITHOUT requiring CCCD to be set.
 # BlueZ discards these packets because CCCD was never written (and the lamp rejects
@@ -64,6 +76,10 @@ def _open_hci_monitor() -> socket.socket | None:
     Requires CAP_NET_ADMIN.  Returns None if permission denied (as it does
     inside HAOS add-on containers, where raw AF_BLUETOOTH sockets are denied).
 
+    When TELINK_HCI_ADAPTER is set the monitor binds to that adapter only
+    (index from hci_adapter_index()); otherwise it binds to HCI_DEV_NONE
+    (all adapters, old behavior).
+
     To use without sudo:
       sudo setcap cap_net_admin,cap_net_raw+eip $(readlink -f .venv/bin/python3)
     """
@@ -72,8 +88,10 @@ def _open_hci_monitor() -> socket.socket | None:
     except OSError as err:
         print(f"  [warn] HCI monitor: socket(AF_BLUETOOTH) failed: {err}", file=sys.stderr, flush=True)
         return None
+    dev = hci_adapter_index()
+    dev = _HCI_DEV_NONE if dev is None else dev
     try:
-        addr = _sockaddr_hci(_AF_BLUETOOTH, _HCI_DEV_NONE, _HCI_CHANNEL_MONITOR)
+        addr = _sockaddr_hci(_AF_BLUETOOTH, dev, _HCI_CHANNEL_MONITOR)
         ret = _libc.bind(sock.fileno(), ctypes.byref(addr), ctypes.sizeof(addr))
     except OSError as err:
         print(f"  [warn] HCI monitor: bind failed: {err}", file=sys.stderr, flush=True)
@@ -218,9 +236,11 @@ class TelinkController:
         # Event-driven scan: check the callback result every 0.25 s instead of
         # sleeping 5 s before the first look — a lamp that is advertising is
         # found in ~0.25 s, not >=5 s (this was the reconnect penalty).
+        if HCI_ADAPTER:
+            print(f"  [ble] scanning on exclusive adapter {HCI_ADAPTER} ...", flush=True)
         loop = asyncio.get_event_loop()
         deadline = loop.time() + timeout
-        async with BleakScanner(callback) as scanner:
+        async with BleakScanner(callback, **scanner_kwargs()) as scanner:
             while loop.time() < deadline:
                 await asyncio.sleep(0.25)
                 if target:
@@ -245,7 +265,7 @@ class TelinkController:
         # Connect via the discovered device object, not the address string:
         # these lamps rotate RPA, so a string reconnect can miss/hang. Bleak
         # resolves the device's current address from the BLEDevice object.
-        self.client = BleakClient(target)
+        self.client = BleakClient(target, **client_kwargs())
         await self.client.connect()
         await asyncio.sleep(0.5)
 
@@ -505,8 +525,9 @@ async def scan_for_telink_lamps(timeout: float = 15.0) -> list[dict]:
             found[device.address.upper()] = device.name or device.address
             _log(f"scan: candidate {device.address} ({device.name}) svc={has_service_uuid} mfr={has_telink_mfr}")
 
-    _log(f"scan: starting BleakScanner (timeout={timeout}s)")
-    async with BleakScanner(callback) as scanner:
+    _log(f"scan: starting BleakScanner (timeout={timeout}s)"
+          + (f" on {HCI_ADAPTER}" if HCI_ADAPTER else ""))
+    async with BleakScanner(callback, **scanner_kwargs()) as scanner:
         await asyncio.sleep(timeout)
     _log(f"scan: finished, raw candidates={len(found)}")
 

@@ -28,3 +28,20 @@ KNOWN_PASSWORDS = _pw_env.split(",") if _pw_env else list(DEFAULT_KNOWN_PASSWORD
 
 # Scan duration in seconds during discovery (add-on option).
 SCAN_TIMEOUT = int(_os.environ.get("TELINK_SCAN_TIMEOUT", "60"))
+
+# Bluetooth adapter pinning: set TELINK_HCI_ADAPTER (e.g. "hci1") to drive
+# ONE adapter exclusively from all bleak scanner/client + raw-HCI-monitor
+# paths. Leave unset/empty for bleak's default (old behavior). Typical
+# layout: a dedicated USB dongle (hci1) for the Telink mesh, HA's own
+# Bluetooth kept on the internal adapter (hci0) — zero radio contention.
+HCI_ADAPTER = (_os.environ.get("TELINK_HCI_ADAPTER") or "").strip() or None
+
+
+def hci_adapter_index(name: str | None = HCI_ADAPTER) -> int | None:
+    """Map 'hciN' to N for the raw HCI monitor bind; None = all adapters."""
+    if not name:
+        return None
+    try:
+        return int(str(name).lower().replace("hci", ""))
+    except (TypeError, ValueError, AttributeError):
+        return None

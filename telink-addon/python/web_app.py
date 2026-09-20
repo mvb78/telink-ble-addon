@@ -17,7 +17,7 @@ from flask import Flask, jsonify, render_template, request
 
 import group_registry as group_registry
 import lamp_registry as registry
-from config import CHAR_COMMAND_UUID, CHAR_NOTIFY_UUID, CHAR_PAIR_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT
+from config import CHAR_COMMAND_UUID, CHAR_NOTIFY_UUID, CHAR_PAIR_UUID, KNOWN_PASSWORDS, SCAN_TIMEOUT, HCI_ADAPTER
 from telink_ble import TelinkController, probe_lamp, scan_for_telink_lamps
 from telink_cli import BROADCAST, _try_daemon, _try_daemon_query, _try_daemon_read, _stop_daemon, cmd_assign_addr, run_on_lamp, _daemon_available
 from telink_mesh import parse_short_group_response
@@ -272,7 +272,7 @@ def api_debug_scan():
             rssi = getattr(adv, "rssi", None) or getattr(device, "rssi", None)
             name = device.name or adv.local_name or ""
             devs.setdefault(addr, {"mac": addr, "name": name, "rssi": rssi})
-        async with BleakScanner(cb) as s:
+        async with BleakScanner(cb, adapter=HCI_ADAPTER) as s:
             await asyncio.sleep(timeout)
         return list(devs.values())
 
@@ -420,13 +420,13 @@ async def _provision_direct(mac, addr, name, password, current_name=None, curren
         from bleak import BleakScanner
         mac = mac.upper()
         mac_bytes = bytes.fromhex(mac.replace(":", ""))
-        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        device = await BleakScanner.find_device_by_address(mac, timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return False, f"{mac} not found (daemon held/still down?)", None
         login_name = current_name if current_name else name
         login_password = current_password if current_password else password
         from bleak import BleakClient
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             if bootstrap:
                 # Brand-new / unprovisioned Telink node bootstrap: the APK uses a
                 # FIXED nonce R_APP = A0..A7 for the initial 0x0C pairing write
@@ -875,10 +875,10 @@ def api_lamp_delete_pairing(mac):
     async def _do():
         import provision_lamp as pl
         from bleak import BleakScanner, BleakClient
-        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15)
+        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return False, f"{mac} not found"
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             try:
                 await pl.apk_login(client, current_name, current_password)
             except Exception as e:
@@ -920,10 +920,10 @@ def api_lamp_get_ltk(mac):
     async def _do():
         import provision_lamp as pl
         from bleak import BleakScanner, BleakClient
-        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15)
+        device = await BleakScanner.find_device_by_address(mac.upper(), timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return None, f"{mac} not found"
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             await pl.apk_login(client, mesh_name, mesh_password)
             ltk = await pl.get_mesh_ltk(client, mesh_name, mesh_password)
             return ltk, f"LTK={ltk.hex()}"
@@ -1175,7 +1175,7 @@ def api_debug_login():
         from bleak import BleakScanner, BleakClient
         import provision_lamp as pl
         from config import CHAR_PAIR_UUID
-        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        device = await BleakScanner.find_device_by_address(mac, timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return {"ok": False, "msg": f"{mac} not found"}
         out = {"mac": mac, "advertised": device.name}
@@ -1186,7 +1186,7 @@ def api_debug_login():
         payload[0] = 0x0C
         payload[1:9] = r1
         payload[9:17] = challenge
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
             await asyncio.sleep(0.6)
             rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
@@ -1223,7 +1223,7 @@ def api_debug_bootstrap_login():
         from bleak import BleakScanner, BleakClient
         from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
         from config import CHAR_PAIR_UUID
-        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        device = await BleakScanner.find_device_by_address(mac, timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return {"ok": False, "msg": f"{mac} not found"}
         out = {"mac": mac, "advertised": device.name,
@@ -1235,7 +1235,7 @@ def api_debug_bootstrap_login():
         payload[0] = 0x0C
         payload[1:9] = R_APP
         payload[9:17] = challenge
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             await client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
             await asyncio.sleep(0.6)
             rsp = await client.read_gatt_char(CHAR_PAIR_UUID)
@@ -1276,7 +1276,7 @@ def api_debug_bruteforce():
         from telink_crypto import derive_base_key, build_challenge, get_session_key, verify_sample_s
         import os as _os
         from config import CHAR_PAIR_UUID
-        device = await BleakScanner.find_device_by_address(mac, timeout=15)
+        device = await BleakScanner.find_device_by_address(mac, timeout=15, adapter=HCI_ADAPTER)
         if not device:
             return {"ok": False, "msg": f"{mac} not found"}
         R_APP = bytes([0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7])
@@ -1284,7 +1284,7 @@ def api_debug_bruteforce():
         tried = 0
         results = {"mac": mac, "advertised": device.name, "flavour": "R_APP" if not random_r1 else "random_r1",
                    "attempts": total}
-        async with BleakClient(device.address) as client:
+        async with BleakClient(device.address, adapter=HCI_ADAPTER) as client:
             for name in names:
                 for password in passwords:
                     tried += 1

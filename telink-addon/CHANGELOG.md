@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.0 - 2026-09-20 (dedicated Bluetooth dongle)
+- Adapter pinning (`TELINK_HCI_ADAPTER` / add-on option `hci_adapter`):
+  every scanner, client and the raw HCI monitor bind to one adapter only
+  (here: hci1, ASUS USB-BT500); HA's Bluetooth stays on the internal hci0.
+
 ## 1.5.0 - 2026-09-19 (group reliability — lab findings)
 - Discovery scan default 45s -> 60s (in-mesh lamps advertise 15-20x slower).
 - Group add/remove unicast 0xD7 to the lamp's own mesh address (reliable
