@@ -215,7 +215,7 @@ class TelinkGroupLight(_TelinkBaseLight):
     # (add-on units: brightness 0-100, colortemp warm% 0-100).
     _SYNC_BRI_TOL = 3
     _SYNC_CT_TOL = 4
-    _SYNC_ROUNDS = 2
+    _SYNC_ROUNDS = 1
 
     def __init__(self, coordinator: TelinkCoordinator, group: dict):
         super().__init__(coordinator, group)

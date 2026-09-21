@@ -136,10 +136,14 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # not retried to avoid double mesh bursts, and "ok": false responses
         # are retried as well since the daemon's own verified send can be
         # racing a keepalive-triggered reconnect.
+        # Budgets are deliberately tight: the daemon fails fast on dead
+        # links (bounded reconnects/retries internally), so a slow command
+        # means mesh trouble — surface it quickly (automation-level retries
+        # handle the rest) instead of hanging UI service calls for minutes.
         last: Exception | None = None
-        for attempt in range(1, 4):
+        for attempt in range(1, 3):
             try:
-                data = await self._request("POST", path, payload=payload, total=90)
+                data = await self._request("POST", path, payload=payload, total=45)
             except UpdateFailed as err:
                 last = err
                 _LOGGER.warning("Telink command %s failed (attempt %d/3): %s",
@@ -151,9 +155,9 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 last = HomeAssistantError(f"Add-on rejected {path}: {msg}")
                 _LOGGER.warning("Telink command %s rejected (attempt %d/3): %s",
                                 path, attempt, msg)
-            if attempt < 3:
+            if attempt < 2:
                 await asyncio.sleep(2)
-        raise HomeAssistantError(f"Telink command {path} failed after 3 attempts: {last}") from last
+        raise HomeAssistantError(f"Telink command {path} failed after 2 attempts: {last}") from last
 
     # -- coordinator ---------------------------------------------------------
     async def _fetch_daemon_state(self) -> dict[str, Any] | None:
