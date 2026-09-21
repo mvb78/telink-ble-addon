@@ -19,6 +19,7 @@ Protocol (one JSON line per request/response):
 """
 
 import asyncio
+import contextlib
 import json
 import os
 import resource
@@ -69,6 +70,38 @@ IDLE_TIMEOUT = float(os.environ.get("TELINK_IDLE_TIMEOUT", "120"))
 # is alive; on failure we reconnect and re-send within the same command call.
 _LINK_VERIFY_TIMEOUT = float(os.environ.get("TELINK_LINK_VERIFY_TIMEOUT", "8"))
 _SEND_ATTEMPTS = 2  # reconnect cycles allowed within one send()
+# Fail-fast bounds for lock acquisition. A hung BLE op must never freeze
+# the daemon's command path: waiters fail fast with an error instead of
+# queueing forever behind a wedged holder (observed: one hung send froze
+# every query/send, zero log output, healthy epoll — a living dead).
+# Order is always session-then-adapter; bounds only break the wait, and a
+# timeout here never corrupts lock state (cancelled acquirers are dropped).
+_SESSION_LOCK_TIMEOUT = float(os.environ.get("TELINK_SESSION_LOCK_TIMEOUT", "60"))
+_ADAPTER_LOCK_TIMEOUT = float(os.environ.get("TELINK_ADAPTER_LOCK_TIMEOUT", "120"))
+
+
+@contextlib.asynccontextmanager
+async def _locked(session_lock: asyncio.Lock, what: str):
+    """Acquire session-then-adapter locks with fail-fast bounds."""
+    try:
+        await asyncio.wait_for(session_lock.acquire(), timeout=_SESSION_LOCK_TIMEOUT)
+    except asyncio.TimeoutError:
+        print(f"  [{what}] session lock busy >{_SESSION_LOCK_TIMEOUT:.0f}s, failing fast",
+              flush=True)
+        raise TimeoutError(f"{what}: session busy")
+    try:
+        try:
+            await asyncio.wait_for(_ADAPTER_LOCK.acquire(), timeout=_ADAPTER_LOCK_TIMEOUT)
+        except asyncio.TimeoutError:
+            print(f"  [{what}] adapter lock busy >{_ADAPTER_LOCK_TIMEOUT:.0f}s, failing fast",
+                  flush=True)
+            raise TimeoutError(f"{what}: adapter busy")
+        try:
+            yield
+        finally:
+            _ADAPTER_LOCK.release()
+    finally:
+        session_lock.release()
 # Actuation confirmation: after a verified unicast send to the session's own
 # lamp, wait this long for a state push reflecting the command. No push =
 # the packet was dropped (stale seq vs the lamp's dedupe window) or the
@@ -444,7 +477,7 @@ class DaemonSession:
         session's, or the adapter scan steals airtime and kills neighbor
         links (reconnect-scan cascade).
         """
-        async with self._lock, _ADAPTER_LOCK:
+        async with _locked(self._lock, self.lamp.get('name', '?')):
             last_error: Exception | None = None
             for attempt in range(1, _SEND_ATTEMPTS + 1):
                 try:
@@ -616,7 +649,7 @@ class DaemonSession:
     async def query(self, opcode: int, params: bytes, response_opcode: int,
                     timeout: float = 4.0) -> bytes | None:
         """Send a query command over this session and return the matching decrypted response."""
-        async with self._lock, _ADAPTER_LOCK:
+        async with _locked(self._lock, self.lamp.get('name', '?')):
             try:
                 return await self._query_locked(opcode, params, response_opcode, timeout)
             finally:
@@ -629,7 +662,7 @@ class DaemonSession:
         can read the lamp's current state directly without needing the HCI
         monitor (which is unavailable inside the add-on container).
         """
-        async with self._lock, _ADAPTER_LOCK:
+        async with _locked(self._lock, self.lamp.get('name', '?')):
             if not self.ctrl.client or not self.ctrl.client.is_connected:
                 await self._reconnect(spawn_keepalive=False)
             data = await self.ctrl.client.read_gatt_char(CHAR_STATUS_UUID)
@@ -686,7 +719,7 @@ class DaemonSession:
             if idle < _KEEPALIVE_INTERVAL:
                 continue
             try:
-                async with self._lock, _ADAPTER_LOCK:
+                async with _locked(self._lock, self.lamp.get('name', '?')):
                     if self.ctrl.client is None:
                         await self._reconnect(spawn_keepalive=False)
                         continue
@@ -1145,7 +1178,9 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                             sess = DaemonSession(lamp)
                             try:
                                 async with _ADAPTER_LOCK:
-                                    await sess.start()
+                                    # Bounded: a hung BLE op must not park the
+                                    # maintainer (and the global lock) forever.
+                                    await asyncio.wait_for(sess.start(), timeout=150.0)
                                 sessions[mac] = sess
                                 _reconnect_backoff.pop(mac, None)
                                 print(f"  [{lamp['name']}] reconnected", flush=True)

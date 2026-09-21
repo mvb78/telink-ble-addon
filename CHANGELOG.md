@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.9 - 2026-09-21 (fail-fast locks, bounded maintainer)
+- Session/adapter lock acquisition is now bounded (60 s/120 s): a hung
+  BLE op can no longer freeze the daemon into a living dead (idle epoll,
+  zero logs, all TCP timing out). Waiters fail fast with a clear error.
+- Maintainer reconnect bounded (150 s).
+
 ## 1.7.8 - 2026-09-21 (fast startup, clean shutdown)
 - Startup tries each lamp once (maintainer owns retries with backoff);
   one silent lamp no longer stalls the whole initial connect for minutes.
