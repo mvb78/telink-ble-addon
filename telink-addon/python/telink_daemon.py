@@ -613,7 +613,62 @@ def _resolve_targets(
     return [s for s in sessions.values() if session_mesh(s) == target_mesh]
 
 
+# Request handling self-defense: at most this many concurrent API requests,
+# each living at most this long. A wedged BLE operation must never be able
+# to pile up one leaked CLOSE_WAIT socket per queued poll (~5/min observed
+# live: 963 stuck handlers with zero log output). Over-limit requests fail
+# fast with an error instead of queueing behind a stuck lock forever —
+# every caller already retries.
+_MAX_CONCURRENT_REQUESTS = 8
+_REQUEST_TIMEOUT_S = 30.0
+_request_semaphore: asyncio.Semaphore | None = None
+
+
+def _request_sem() -> asyncio.Semaphore:
+    global _request_semaphore
+    if _request_semaphore is None:
+        _request_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_REQUESTS)
+    return _request_semaphore
+
+
 async def _handle_client(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    sessions: dict[str, DaemonSession],
+):
+    try:
+        async with _request_sem():
+            await asyncio.wait_for(
+                _handle_client_inner(reader, writer, sessions),
+                timeout=_REQUEST_TIMEOUT_S)
+    except (asyncio.TimeoutError, asyncio.CancelledError):
+        try:
+            writer.close()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            writer.write((json.dumps({"status": "error", "msg": str(e)}) + "\n").encode())
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+    finally:
+        try:
+            writer.close()
+        except Exception:
+            pass
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+async def _handle_client_inner(
     reader: asyncio.StreamReader,
     writer: asyncio.StreamWriter,
     sessions: dict[str, DaemonSession],

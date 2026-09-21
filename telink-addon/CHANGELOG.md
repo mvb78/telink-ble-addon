@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.12 - 2026-09-20 (request self-defense)
+- `_handle_client` split: semaphore(8) + 30 s `wait_for` + guaranteed close
+  on every path. No request can pile up sockets behind a wedged BLE op.
+
 ## 1.6.11 - 2026-09-20 (bounded reconnect login)
 - 40 s guard around connect+login in `_reconnect` via `_connect_and_login`.
 

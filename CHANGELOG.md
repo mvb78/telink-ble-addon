@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.6.12 - 2026-09-20 (request self-defense: semaphore + 30 s cap)
+- API requests now run at most 8 concurrent with a 30 s lifetime cap, and
+  the socket is closed on every path. Diagnosed live: 963 leaked CLOSE_WAIT
+  sockets (one per queued poll) piled up with zero log output whenever any
+  BLE op hung past all timeouts — each stuck handler pinned its accepted
+  socket. Over-limit requests now fail fast (all callers retry) instead of
+  queueing behind a stuck lock forever.
+
 ## 1.6.11 - 2026-09-20 (bounded reconnect login)
 - `_reconnect` wraps connect+login in a 40 s guard. A BlueZ hang inside
   login's GATT ops (no timeout of their own) while holding the global
