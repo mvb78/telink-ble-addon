@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.1 - 2026-09-21 (synchronous close order stops BLE FD leak)
+- `disconnect()`: cancel monitor task (no await), close monitor socket
+  synchronously, then bounded remote disconnect. Timeout-cancelled
+  disconnects no longer orphan HCI/BLE sockets.
+
 ## 1.7.0 - 2026-09-21 (persistent scanner)
 - `ScannerService` + `connect()` rewrite + unit tests; daemon warms the
   table at startup; misleading "phone app" error message fixed.
