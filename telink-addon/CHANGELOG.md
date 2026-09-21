@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.7.0 - 2026-09-21 (persistent scanner)
+- `ScannerService` + `connect()` rewrite + unit tests; daemon warms the
+  table at startup; misleading "phone app" error message fixed.
+
 ## 1.6.13 - 2026-09-21 (fail-fast semaphore acquisition)
 - 10 s timeout on semaphore acquire with "server busy" response; no request
   queues forever behind stuck BLE operations.

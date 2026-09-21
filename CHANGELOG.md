@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.7.0 - 2026-09-21 (persistent scanner — no more per-connect scans)
+- New `ScannerService`: one long-lived BleakScanner per process with a live
+  device table; `connect()` waits on the table instead of starting/stopping
+  a scanner per attempt. Sniffer-proven root cause of "not found": per-
+  connect 8 s scan windows miss slow advertisers (B3: ~1 ADV/5 s) while
+  start/stop churn keeps BlueZ discovery unsettled — yet a clean scan finds
+  all 6 lamps in seconds. Legacy per-connect scan kept behind
+  `TELINK_LEGACY_SCAN=1`.
+
 ## 1.6.13 - 2026-09-21 (fail-fast semaphore acquisition)
 - Semaphore acquire wrapped in a 10 s timeout returning "server busy" so
   state reads and new requests never queue indefinitely behind stuck BLE

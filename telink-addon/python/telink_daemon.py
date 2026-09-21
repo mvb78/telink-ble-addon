@@ -28,7 +28,7 @@ import time
 
 import lamp_registry as registry
 import group_registry
-from telink_ble import TelinkController, SequenceManager
+from telink_ble import TelinkController, SequenceManager, get_scanner
 from config import CHAR_STATUS_UUID
 
 SOCK_PATH = "/tmp/telink-ble.sock"
@@ -1113,6 +1113,14 @@ async def start_daemon():
         async def _initial():
             connect_busy.set()
             try:
+                # Warm the persistent scanner first so connects resolve from
+                # the live table instead of each starting their own scan.
+                try:
+                    await get_scanner().start()
+                    await asyncio.sleep(3.0)
+                except Exception as err:
+                    print(f"  [warn] persistent scanner failed to start: {err} "
+                          f"(connects fall back per-attempt)", flush=True)
                 new = await _build_sessions()
                 sessions.update(new)
                 print(f"Initial connect done ({len(new)} lamp(s)).", flush=True)

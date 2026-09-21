@@ -198,3 +198,59 @@ def test_resolve_hci_adapter_usb_vidpid(monkeypatch):
     assert config.resolve_hci_adapter("usb:ffff:ffff") is None
     # MAC form needs address fields (absent here -> None, no crash)
     assert config.resolve_hci_adapter("AA:BB:CC:DD:EE:FF") is None
+
+
+class _FakeScanner:
+    def __init__(self, *a, **k):
+        pass
+    async def __aenter__(self):
+        return self
+    async def __aexit__(self, *a):
+        return False
+
+
+def test_scanner_lookup_fresh_stale_prune():
+    import asyncio
+    from telink_ble import ScannerService
+    svc = ScannerService()
+    loop = asyncio.new_event_loop()
+    now = loop.time()
+    dev = object()
+    svc._devices["AA:BB:CC:DD:EE:FF"] = (dev, now, -60)
+    svc._devices["11:22:33:44:55:66"] = (dev, now - 500, -70)  # stale
+    assert svc.lookup("aa:bb:cc:dd:ee:ff") is dev
+    assert svc.lookup("11:22:33:44:55:66") is None       # stale -> miss...
+    assert "11:22:33:44:55:66" not in svc._devices       # ...and pruned
+    assert svc.lookup("00:00:00:00:00:00") is None
+    loop.close()
+
+
+def test_scanner_wait_for_hits_table_and_times_out():
+    import asyncio
+    from telink_ble import ScannerService
+    svc = ScannerService()
+    dev = object()
+    async def go():
+        svc._devices["AA:BB:CC:DD:EE:FF"] = (dev, asyncio.get_event_loop().time(), -60)
+        got = await svc.wait_for("aa:bb:cc:dd:ee:ff", timeout=5.0)
+        assert got is dev
+        miss = await svc.wait_for("00:00:00:00:00:00", timeout=0.3)
+        assert miss is None
+    asyncio.run(go())
+
+
+def test_scanner_start_idempotent(monkeypatch):
+    import asyncio
+    import telink_ble
+    monkeypatch.setattr(telink_ble, "BleakScanner", _FakeScanner)
+    from telink_ble import ScannerService
+    async def go():
+        svc = ScannerService()
+        await svc.start()
+        first = svc._task
+        assert svc.running
+        await svc.start()  # second start must not spawn another task
+        assert svc._task is first
+        await svc.stop()
+        assert not svc.running
+    asyncio.run(go())

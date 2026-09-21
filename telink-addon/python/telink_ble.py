@@ -230,6 +230,101 @@ class AddrConfirmWatcher:
             self._sock = None
 
 
+class ScannerService:
+    """One long-lived BleakScanner for the whole process.
+
+    Per-connect scanner start/stop cycles churn BlueZ discovery and miss
+    slow advertisers (B3: ~1 ADV/5s) inside short windows; the resulting
+    "not found" errors feed reconnect storms that saturate the adapter.
+    A single persistent scanner maintains a live device table instead —
+    connects wait on the table, discovery never restarts.
+    """
+
+    def __init__(self):
+        self._devices: dict[str, tuple] = {}  # mac -> (device, seen_monotonic, rssi)
+        self._task = None
+        self._lock = None  # created lazily (needs a running loop)
+
+    def _callback(self, device, adv):
+        try:
+            rssi = getattr(adv, "rssi", None)
+            if rssi is None:
+                rssi = getattr(device, "rssi", None)
+        except Exception:
+            rssi = None
+        # NOTE: loop.time() is time.monotonic() underneath; using monotonic
+        # directly keeps this comparable from any context (incl. tests).
+        import time as _t
+        self._devices[device.address.upper()] = (device, _t.monotonic(), rssi)
+
+    async def start(self):
+        """Idempotent start (safe under concurrency)."""
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        async with self._lock:
+            if self._task is not None and not self._task.done():
+                return
+            if HCI_ADAPTER:
+                print(f"  [ble] persistent scanner on {active_hci_adapter() or HCI_ADAPTER} ...",
+                      flush=True)
+
+            async def _run():
+                async with BleakScanner(self._callback, **scanner_kwargs()):
+                    await asyncio.Future()  # run until cancelled
+
+            self._task = asyncio.get_event_loop().create_task(_run())
+
+    async def stop(self):
+        task, self._task = self._task, None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    @property
+    def running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    def lookup(self, mac: str, max_age: float = 30.0):
+        """Fresh cached device or None. Prunes stale neighbor entries."""
+        import time as _t
+        now = _t.monotonic()
+        ent = self._devices.get(mac.upper())
+        if ent is not None:
+            device, ts, _rssi = ent
+            if now - ts <= max_age:
+                return device
+        # Opportunistic prune so neighbor devices don't accumulate forever.
+        for m in [k for k, (_, ts, _) in self._devices.items() if now - ts > 120.0]:
+            del self._devices[m]
+        return None
+
+    async def wait_for(self, mac: str, timeout: float = 20.0):
+        """Wait until mac is freshly seen; returns device or None."""
+        await self.start()
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
+            dev = self.lookup(mac)
+            if dev is not None:
+                return dev
+            await asyncio.sleep(0.5)
+        # Restart a dead scanner task instead of wedging forever.
+        if not self.running:
+            await self.start()
+        return self.lookup(mac)
+
+
+_SCANNER = ScannerService()
+
+
+def get_scanner() -> ScannerService:
+    """Process-wide persistent scanner (drives all connects)."""
+    return _SCANNER
+
+
 class TelinkController:
     def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None,
                  on_plain=None):
@@ -248,35 +343,47 @@ class TelinkController:
         self._monitor_task: asyncio.Task | None = None
         self._monitor_sock: socket.socket | None = None
 
-    async def connect(self, timeout: float = 8.0):
-        print(f"  Scanning for {self.name} ({self.mac}) ...")
-        target = None
+    async def connect(self, timeout: float = 20.0):
+        # Persistent-scanner path (default): wait on the live device table
+        # instead of starting/stopping a scanner per connect. Set
+        # TELINK_LEGACY_SCAN=1 to restore the old per-connect scan.
+        if not os.environ.get("TELINK_LEGACY_SCAN", ""):
+            target = await get_scanner().wait_for(self.mac, timeout=timeout)
+            if target is None:
+                raise Exception(
+                    f"{self.mac} not seen advertising within {timeout:.0f}s — "
+                    f"check wall power/advertising (sniffer-verified: healthy "
+                    f"lamps advertise continuously)"
+                )
+        else:
+            print(f"  Scanning for {self.name} ({self.mac}) ...")
+            target = None
 
-        def callback(device, adv):
-            nonlocal target
-            if target:
-                return
-            if device.address.upper() == self.mac:
-                target = device
-
-        # Event-driven scan: check the callback result every 0.25 s instead of
-        # sleeping 5 s before the first look — a lamp that is advertising is
-        # found in ~0.25 s, not >=5 s (this was the reconnect penalty).
-        if HCI_ADAPTER:
-            print(f"  [ble] scanning on exclusive adapter {active_hci_adapter() or HCI_ADAPTER} ...", flush=True)
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + timeout
-        async with BleakScanner(callback, **scanner_kwargs()) as scanner:
-            while loop.time() < deadline:
-                await asyncio.sleep(0.25)
+            def callback(device, adv):
+                nonlocal target
                 if target:
-                    break
+                    return
+                if device.address.upper() == self.mac:
+                    target = device
 
-        if not target:
-            raise Exception(
-                f"{self.mac} not found — is the phone app disconnected? "
-                f"(try `discover` to refresh the MAC)"
-            )
+            # Event-driven scan: check the callback result every 0.25 s instead of
+            # sleeping 5 s before the first look — a lamp that is advertising is
+            # found in ~0.25 s, not >=5 s (this was the reconnect penalty).
+            if HCI_ADAPTER:
+                print(f"  [ble] scanning on exclusive adapter {active_hci_adapter() or HCI_ADAPTER} ...", flush=True)
+            loop = asyncio.get_event_loop()
+            deadline = loop.time() + timeout
+            async with BleakScanner(callback, **scanner_kwargs()) as scanner:
+                while loop.time() < deadline:
+                    await asyncio.sleep(0.25)
+                    if target:
+                        break
+
+            if not target:
+                raise Exception(
+                    f"{self.mac} not found — is the phone app disconnected? "
+                    f"(try `discover` to refresh the MAC)"
+                )
 
         # Open the HCI monitor socket before connecting so we don't miss the
         # first notification burst that arrives right after login.
