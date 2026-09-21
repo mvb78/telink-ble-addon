@@ -1241,7 +1241,7 @@ _FD_CHECK_INTERVAL = 60.0
 
 
 _BLUEZ_CHECK_INTERVAL = float(os.environ.get("TELINK_BLUEZ_CHECK_INTERVAL", "60"))
-_BLUEZ_MAX_FAILS = int(os.environ.get("TELINK_BLUEZ_MAX_FAILS", "2"))
+_BLUEZ_MAX_FAILS = int(os.environ.get("TELINK_BLUEZ_MAX_FAILS", "4"))
 
 
 async def _bluez_adapters_ok(timeout: float = 10.0) -> bool:
