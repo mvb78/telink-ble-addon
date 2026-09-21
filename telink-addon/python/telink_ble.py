@@ -287,8 +287,17 @@ class ScannerService:
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def lookup(self, mac: str, max_age: float = 30.0):
-        """Fresh cached device or None. Prunes stale neighbor entries."""
+    def lookup(self, mac: str, max_age: float = 300.0):
+        """Cached device seen within max_age, or None.
+
+        NOTE (sniffer-verified 2026-09-21): BlueZ deduplicates steady
+        advertisers — a lamp advertising 1-2/s yields callbacks only for
+        ~10 s after discovery starts, then goes quiet until something
+        changes. The table is therefore a *hint*, not ground truth: a
+        5-minute-old sighting still justifies one connect attempt, and the
+        connect itself (bounded, fast-failing) is the truth. Prunes
+        neighbor entries older than 10 min.
+        """
         import time as _t
         now = _t.monotonic()
         ent = self._devices.get(mac.upper())
@@ -297,7 +306,7 @@ class ScannerService:
             if now - ts <= max_age:
                 return device
         # Opportunistic prune so neighbor devices don't accumulate forever.
-        for m in [k for k, (_, ts, _) in self._devices.items() if now - ts > 120.0]:
+        for m in [k for k, (_, ts, _) in self._devices.items() if now - ts > 600.0]:
             del self._devices[m]
         return None
 

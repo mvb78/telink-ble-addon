@@ -217,10 +217,13 @@ def test_scanner_lookup_fresh_stale_prune():
     now = loop.time()
     dev = object()
     svc._devices["AA:BB:CC:DD:EE:FF"] = (dev, now, -60)
-    svc._devices["11:22:33:44:55:66"] = (dev, now - 500, -70)  # stale
+    svc._devices["11:22:33:44:55:66"] = (dev, now - 500, -70)  # beyond max_age
     assert svc.lookup("aa:bb:cc:dd:ee:ff") is dev
     assert svc.lookup("11:22:33:44:55:66") is None       # stale -> miss...
-    assert "11:22:33:44:55:66" not in svc._devices       # ...and pruned
+    assert "11:22:33:44:55:66" in svc._devices           # ...but kept (prune is 600s)
+    svc._devices["11:22:33:44:55:66"] = (dev, now - 700, -70)
+    assert svc.lookup("00:00:00:00:00:00") is None
+    assert "11:22:33:44:55:66" not in svc._devices       # pruned past 600s
     assert svc.lookup("00:00:00:00:00:00") is None
     loop.close()
 
