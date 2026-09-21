@@ -5,7 +5,7 @@
 # which the add-on's own container can't open). It shares the add-on's /data
 # and the host D-Bus, and listens on TCP 0.0.0.0:8097 for the add-on to bridge.
 #
-# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.7.10)
+# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.7.11)
 set -euo pipefail
 
 TAG="${1:-1.7.1}"

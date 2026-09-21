@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.11 - 2026-09-21 (BlueZ self-healing)
+- Daemon BlueZ watchdog: host bluetoothd dies every ~30-60 min and
+  nothing restarts it; bleak never recovers a dead bus. On 2 missed
+  adapter checks the daemon stops sessions cleanly and re-execs onto a
+  fresh D-Bus connection. Companion bt-watchdog sidecar resurrects host
+  bluetoothd via setns+exec.
+
 ## 1.7.10 - 2026-09-21 (bounded login GATT ops)
 - login()'s write/read/subscribe now bounded (12 s each,
   TELINK_LOGIN_OP_TIMEOUT). A half-dead link used to hang login forever

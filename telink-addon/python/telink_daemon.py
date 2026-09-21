@@ -1240,6 +1240,73 @@ _FD_WARN_THRESHOLD = 4096  # watchdog fatal above this (limit is 8192+)
 _FD_CHECK_INTERVAL = 60.0
 
 
+_BLUEZ_CHECK_INTERVAL = float(os.environ.get("TELINK_BLUEZ_CHECK_INTERVAL", "60"))
+_BLUEZ_MAX_FAILS = int(os.environ.get("TELINK_BLUEZ_MAX_FAILS", "2"))
+
+
+async def _bluez_adapters_ok(timeout: float = 10.0) -> bool:
+    """True when host BlueZ exposes at least one adapter via D-Bus.
+
+    Host bluetoothd dies every ~30-60 min under BLE load and nothing
+    restarts it; every BLE op then hangs and the daemon freezes silently.
+    An external watchdog resurrects bluetoothd — this check detects the
+    outage so we can re-exec onto a fresh D-Bus connection afterwards
+    (bleak never recovers a dead bus on its own)."""
+    try:
+        from dbus_fast import Message
+        from dbus_fast.aio import MessageBus
+        bus = await MessageBus(
+            bus_address="unix:path=/run/dbus/system_bus_socket").connect()
+        try:
+            r = await asyncio.wait_for(bus.call(Message(
+                destination="org.bluez", path="/",
+                interface="org.freedesktop.DBus.ObjectManager",
+                member="GetManagedObjects", signature="", body=[])),
+                timeout=timeout)
+            return any("org.bluez.Adapter1" in ifaces
+                       for ifaces in r.body[0].values())
+        finally:
+            try:
+                bus.disconnect()
+            except Exception:
+                pass
+    except Exception:
+        return False
+
+
+async def _bluez_watchdog(sessions: dict[str, "DaemonSession"],
+                          stop_event: asyncio.Event) -> None:
+    """Re-exec the daemon when host BlueZ is gone.
+
+    Stops sessions cleanly first (bounded) so lamps drop to advertising
+    instead of holding orphaned links, then os.execv's into a fresh
+    process: fresh D-Bus connection, fresh initial connect."""
+    fails = 0
+    while not stop_event.is_set():
+        await asyncio.sleep(_BLUEZ_CHECK_INTERVAL)
+        if stop_event.is_set():
+            return
+        if await _bluez_adapters_ok():
+            fails = 0
+            continue
+        fails += 1
+        print(f"BlueZ check failed #{fails}; host bluetoothd likely dead",
+              flush=True)
+        if fails < _BLUEZ_MAX_FAILS:
+            continue
+        print("BlueZ gone; stopping sessions and re-execing daemon ...",
+              flush=True)
+        try:
+            await asyncio.wait_for(asyncio.gather(
+                *[s.stop() for s in list(sessions.values())],
+                return_exceptions=True), timeout=30.0)
+        except Exception:
+            pass
+        sys.stdout.flush()
+        os.execv(sys.executable,
+                 [sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+
+
 async def _fd_watchdog():
     """Kill the process when file descriptors saturate.
 
@@ -1331,6 +1398,8 @@ async def start_daemon():
         _idle_sweeper(sessions, stop_event)
     )
     fd_watchdog = asyncio.get_event_loop().create_task(_fd_watchdog())
+    bluez_watchdog = asyncio.get_event_loop().create_task(
+        _bluez_watchdog(sessions, stop_event))
     reconciler = asyncio.get_event_loop().create_task(
         _reconcile_loop(sessions, stop_event)
     )
@@ -1342,7 +1411,8 @@ async def start_daemon():
     watcher.cancel()
     idle_sweeper.cancel()
     reconciler.cancel()
-    for task in (watcher, idle_sweeper, reconciler):
+    bluez_watchdog.cancel()
+    for task in (watcher, idle_sweeper, reconciler, bluez_watchdog):
         try:
             await task
         except asyncio.CancelledError:
