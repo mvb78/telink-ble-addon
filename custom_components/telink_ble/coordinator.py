@@ -263,6 +263,23 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Compose group truth: a mesh group has no read-back, but every member
         # lamp pushes its 0xDB status through its own session, so the OR over
         # known members is the real group state.
+        group_states = self._compose_group_states(groups, cached_state)
+
+        await self._check_stale_lamps(lamps, cached_state, connected)
+
+        return {
+            "lamps": lamps,
+            "groups": groups,
+            "status": by_mac,
+            "connected": connected,
+            "cached_state": cached_state,
+            "group_states": group_states,
+        }
+
+    @staticmethod
+    def _compose_group_states(groups: list[dict],
+                              cached_state: dict[str, Any]) -> dict[int, dict]:
+        """Compose per-group truth from member push caches (no BLE traffic)."""
         group_states: dict[int, dict] = {}
         for group in groups or []:
             addr = group.get("address")
@@ -280,17 +297,26 @@ class TelinkCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "unknown_mask": [m for m in members
                                      if m.lower() not in cached_state],
                 }
+        return group_states
 
-        await self._check_stale_lamps(lamps, cached_state, connected)
+    async def async_refresh_state_cache(self) -> None:
+        """Lightweight refresh: daemon push cache + recomposed groups only.
 
-        return {
-            "lamps": lamps,
-            "groups": groups,
-            "status": by_mac,
-            "connected": connected,
-            "cached_state": cached_state,
-            "group_states": group_states,
-        }
+        Memory-speed (no BLE traffic), used by group member-sync rounds so a
+        service call doesn't pay for full BLE status polls per round.
+        """
+        try:
+            fresh = await self._fetch_daemon_state()
+        except Exception:  # noqa: BLE001 — best effort
+            _LOGGER.debug("Telink fast state refresh failed", exc_info=True)
+            return
+        if not fresh:
+            return
+        data = dict(self.data or {})
+        data["cached_state"] = {k.lower(): v for k, v in fresh.items()}
+        data["group_states"] = self._compose_group_states(
+            data.get("groups", []), data["cached_state"])
+        self.async_set_updated_data(data)
 
     async def _check_stale_lamps(self, lamps: list[dict],
                                  cached_state: dict[str, Any],

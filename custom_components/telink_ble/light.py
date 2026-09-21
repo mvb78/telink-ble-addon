@@ -334,8 +334,10 @@ class TelinkGroupLight(_TelinkBaseLight):
                 except Exception as err:  # noqa: BLE001 — one dead lamp must not fail the group
                     _LOGGER.warning("Telink group %s: member %s re-sync failed: %s",
                                     self._name, mac, err)
-            await asyncio.sleep(2)
-            await self.coordinator.async_request_refresh()
+            await asyncio.sleep(3)
+            # Lightweight refresh (push cache only, no BLE status poll) so
+            # sync rounds cost seconds, not the ~60s+ of a full refresh.
+            await self.coordinator.async_refresh_state_cache()
 
     @callback
     def _handle_coordinator_update(self) -> None:
