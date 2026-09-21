@@ -1181,10 +1181,11 @@ async def _watch_config(sessions: dict[str, DaemonSession], stop_event: asyncio.
                             print(f"Reconnecting missing lamp {mac} ...", flush=True)
                             sess = DaemonSession(lamp)
                             try:
-                                async with _ADAPTER_LOCK:
-                                    # Bounded: a hung BLE op must not park the
-                                    # maintainer (and the global lock) forever.
-                                    await asyncio.wait_for(sess.start(), timeout=150.0)
+                                # NOTE: no outer _ADAPTER_LOCK here — start()
+                                # acquires it itself; double-locking deadlocks
+                                # (asyncio locks are not reentrant) and every
+                                # maintainer retry burned the full 150 s.
+                                await asyncio.wait_for(sess.start(), timeout=150.0)
                                 sessions[mac] = sess
                                 _reconnect_backoff.pop(mac, None)
                                 print(f"  [{lamp['name']}] reconnected", flush=True)

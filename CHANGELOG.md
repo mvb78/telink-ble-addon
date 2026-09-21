@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.14 - 2026-09-21 (fix maintainer double-lock deadlock)
+- The maintainer retry wrapped sess.start() in _ADAPTER_LOCK, but
+  start() acquires the same lock itself. asyncio locks are not
+  reentrant: every missing-lamp retry deadlocked itself for the full
+  150 s, monopolized the adapter, and never reconnected anything.
+  Missing lamps can actually come back now.
+
 ## 1.7.13 - 2026-09-21 (wrap-safe sno init)
 - Shared-sno init caps the margin at the 24-bit ceiling (near-ceiling
   registry restarts at 0xFFFFFF, rolls over naturally) instead of
