@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.13 - 2026-09-21 (wrap-safe sno init)
+- Shared-sno init caps the margin at the 24-bit ceiling (near-ceiling
+  registry restarts at 0xFFFFFF, rolls over naturally) instead of
+  wrapping to a value lamps reject as replay. advance_to masks
+  correctly. NOT DEPLOYED as sidecar (running 1.7.12 + SEQ_START env is
+  equivalent); ships on next restart.
+
 ## 1.7.11 - 2026-09-21 (BlueZ self-healing)
 - Daemon BlueZ watchdog: host bluetoothd dies every ~30-60 min and
   nothing restarts it; bleak never recovers a dead bus. On 2 missed

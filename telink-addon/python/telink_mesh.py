@@ -28,11 +28,12 @@ class SequenceManager:
 
         Absolute (non-modular) comparison: we never wrap voluntarily, and a
         rewound lamp window can only be escaped by moving strictly forward.
-        Returns the new current sno."""
+        Wraps to 1 only if floor itself is at the 24-bit ceiling (natural
+        rollover, accepted modularly). Returns the new current sno."""
         floor = int(floor) & 0xFFFFFF
         if floor >= self.seq:
-            self.seq = floor + 1
-            if self.seq > 0xFFFFFF:
+            self.seq = (floor + 1) & 0xFFFFFF
+            if self.seq == 0:
                 self.seq = 1
         return self.seq
 

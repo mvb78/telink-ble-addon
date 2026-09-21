@@ -249,7 +249,11 @@ def _init_shared_seq(lamps: list[dict]) -> SequenceManager:
             pass
     _SHARED_SEQ = SequenceManager()
     if top:
-        _SHARED_SEQ.advance_to((top + _SEQ_BUMP) & 0xFFFFFF)
+        # Never wrap voluntarily at init: cap the margin at the ceiling so
+        # a near-ceiling registry (normal after long uptime) restarts at
+        # 0xFFFFFF and rolls over naturally (+1 modular step) instead of
+        # jumping to a low value the lamps reject as replay.
+        _SHARED_SEQ.advance_to(min(top + _SEQ_BUMP, 0xFFFFFF) - 1)
     # Absolute operator override for replay-desync recovery: the registry
     # file can be poisoned DOWNWARD by wrapped pre-bump persists while lamp
     # windows sit near the ceiling; start exactly here instead.
