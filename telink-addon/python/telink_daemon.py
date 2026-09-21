@@ -500,6 +500,11 @@ class DaemonSession:
                         except Exception as reconnect_error:
                             last_error = reconnect_error
             assert last_error is not None
+            # Persist even on failure: the snos were consumed from our
+            # monotone counter and the fire-and-forget writes may have
+            # advanced lamp windows anyway. Never let the file fall behind
+            # the counter, or the next restart resumes inside old windows.
+            _persist_shared_seq()
             raise last_error
 
     def _maybe_bump_seq(self) -> None:
@@ -609,7 +614,10 @@ class DaemonSession:
                     timeout: float = 4.0) -> bytes | None:
         """Send a query command over this session and return the matching decrypted response."""
         async with self._lock, _ADAPTER_LOCK:
-            return await self._query_locked(opcode, params, response_opcode, timeout)
+            try:
+                return await self._query_locked(opcode, params, response_opcode, timeout)
+            finally:
+                _persist_shared_seq()
 
     async def read_status(self) -> bytes | None:
         """Read the lamp's status characteristic (0d1913) over the live session.
