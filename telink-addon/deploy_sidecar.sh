@@ -5,7 +5,7 @@
 # which the add-on's own container can't open). It shares the add-on's /data
 # and the host D-Bus, and listens on TCP 0.0.0.0:8097 for the add-on to bridge.
 #
-# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.7.5)
+# Usage:  sudo ./deploy_sidecar.sh [image-tag]      (default: 1.7.6)
 set -euo pipefail
 
 TAG="${1:-1.7.1}"
@@ -42,7 +42,7 @@ docker run -d --name "$NAME" \
   -e TELINK_HCI_ADAPTER="${TELINK_HCI_ADAPTER:-usb:0b05:190e}" \
   -e TELINK_DAEMON_HOST=0.0.0.0 \
   -e TELINK_DAEMON_PORT=8097 \
-  -e TELINK_QUARANTINE_MACS="${TELINK_QUARANTINE_MACS:-68:EC:62:02:87:A5}" \
+  -e TELINK_QUARANTINE_MACS="${TELINK_QUARANTINE_MACS:-}" \
   "$IMAGE" \
   python3 telink_daemon.py
 

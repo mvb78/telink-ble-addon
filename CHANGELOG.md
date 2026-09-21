@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.7.6 - 2026-09-21 (patient confirmation for slow flood mesh)
+- Push wait 3 s -> 6 s; fallback status-query verification retries up to
+  3 rounds. The flood mesh delivers seconds late via relays; the old
+  tight windows declared false failures and each one burned a
+  global-lock rebuild, collapsing the mesh under load.
+- Quarantine default emptied (A5 delivers again after 0xE0 rebind);
+  mechanism kept via env for genuinely dead outputs.
+
 ## 1.7.5 - 2026-09-21 (TELINK_SEQ_START recovery override)
 - Absolute sno start override for replay-desync recovery (registry file
   can be poisoned downward by wrapped pre-bump persists while lamp flash

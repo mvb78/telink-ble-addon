@@ -73,7 +73,11 @@ _SEND_ATTEMPTS = 2  # reconnect cycles allowed within one send()
 # lamp, wait this long for a state push reflecting the command. No push =
 # the packet was dropped (stale seq vs the lamp's dedupe window) or the
 # lamp-side session is wedged — both fixed by reconnect + retry.
-_PUSH_WAIT_S = float(os.environ.get("TELINK_PUSH_WAIT_S", "3.0"))
+_PUSH_WAIT_S = float(os.environ.get("TELINK_PUSH_WAIT_S", "6.0"))
+# Query-verification rounds after the push wait: the flood mesh can deliver
+# seconds late (relays), so a single 4 s query proves nothing. Each round
+# sends the 0xDA status query twice and compares the answer.
+_PUSH_VERIFY_ROUNDS = int(os.environ.get("TELINK_PUSH_VERIFY_ROUNDS", "3"))
 # If the last decoded push is older than this, the lamp may have advanced
 # its seq counter without us seeing it (no pushes observed to learn from).
 # Bump our counter forward pre-emptively so the send isn't dropped as a
@@ -544,20 +548,26 @@ class DaemonSession:
                 push_before = self._push_count
             await asyncio.sleep(0.2)
         # No matching push seen — but the push itself may have been lost in
-        # noise while the lamp did actuate. Ask directly before declaring
-        # failure.
-        try:
-            pkt = await self._query_locked(0xDA, _STATUS_PARAMS, 0xDB, timeout=4.0)
-        except Exception:
-            pkt = None
-        if pkt:
-            entry, _seq = _decode_status_push(pkt)
-            if entry is not None:
-                entry["ts"] = round(time.time(), 3)
-                self.state_cache = entry
-                self._push_count += 1
-                if _push_matches_command(entry, opcode, params):
-                    return
+        # noise while the lamp did actuate, or the flood mesh may deliver
+        # seconds late via relays. Ask directly (repeatedly) before
+        # declaring failure: a query-verified state is honest success, and
+        # avoids a pointless global-lock rebuild storm over late delivery.
+        for rnd in range(max(1, _PUSH_VERIFY_ROUNDS)):
+            try:
+                pkt = await self._query_locked(0xDA, _STATUS_PARAMS, 0xDB,
+                                               timeout=4.0)
+            except Exception:
+                pkt = None
+            if pkt:
+                entry, _seq = _decode_status_push(pkt)
+                if entry is not None:
+                    entry["ts"] = round(time.time(), 3)
+                    self.state_cache = entry
+                    self._push_count += 1
+                    if _push_matches_command(entry, opcode, params):
+                        return
+            if rnd < _PUSH_VERIFY_ROUNDS - 1:
+                await asyncio.sleep(1.0)
         raise TimeoutError(
             f"no actuation push from {self.lamp['mac']} within {_PUSH_WAIT_S}s "
             f"(op={opcode:#04x}); packet likely dropped")
