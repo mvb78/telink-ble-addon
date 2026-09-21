@@ -182,6 +182,64 @@ def _push_matches_command(entry: dict, opcode: int, params: bytes) -> bool:
     return True
 
 
+# Process-wide mesh sno source. Mesh packets carry no source address, so
+# lamps dedupe on the bare sno: per-session counters interleave, and any
+# lagging session's command packets are dropped as replays forever (reads
+# are not deduped, which is why queries kept working while commands died).
+# A single monotone counter keeps every packet above every lamp's window.
+_SHARED_SEQ: SequenceManager | None = None
+
+
+def _shared_seq() -> SequenceManager:
+    assert _SHARED_SEQ is not None, "shared sno source not initialised"
+    return _SHARED_SEQ
+
+
+def _init_shared_seq(lamps: list[dict]) -> SequenceManager:
+    """Start the shared counter above every persisted lamp window.
+
+    Forward jumps are accepted by lamps (only rewinds are rejected), so
+    starting at max(last_seq) + margin re-anchors all sessions in one
+    move, including sessions whose counters lagged behind."""
+    global _SHARED_SEQ
+    if _SHARED_SEQ is not None:
+        return _SHARED_SEQ
+    top = 0
+    for lamp in lamps or []:
+        try:
+            top = max(top, int(lamp.get("last_seq") or 0))
+        except (TypeError, ValueError):
+            pass
+    _SHARED_SEQ = SequenceManager()
+    if top:
+        _SHARED_SEQ.advance_to((top + _SEQ_BUMP) & 0xFFFFFF)
+    print(f"shared sno starts at {_SHARED_SEQ.seq} (persisted max {top})",
+          flush=True)
+    return _SHARED_SEQ
+
+
+def _persist_shared_seq() -> None:
+    """Max-merge the shared sno into every registry entry so a restart
+    resumes above all lamp windows."""
+    if _SHARED_SEQ is None:
+        return
+    try:
+        lamps = registry.load()
+        changed = False
+        for lamp in lamps:
+            try:
+                cur = int(lamp.get("last_seq") or 0)
+            except (TypeError, ValueError):
+                cur = 0
+            if _SHARED_SEQ.seq > cur:
+                lamp["last_seq"] = _SHARED_SEQ.seq
+                changed = True
+        if changed:
+            registry.save(lamps)
+    except Exception:
+        pass
+
+
 class DaemonSession:
     # All live session objects by MAC — lets mesh-relayed STATUS frames
     # (captured on ANY session) update the ORIGIN lamp's cache, not the
@@ -194,7 +252,8 @@ class DaemonSession:
         DaemonSession._sessions[str(lamp.get("mac", "")).upper()] = self
         self.ctrl = TelinkController(lamp["mac"], lamp["name"], lamp["password"],
                                      initial_seq=lamp.get("last_seq"),
-                                     on_plain=self.note_plain)
+                                     on_plain=self.note_plain,
+                                     seq_manager=_init_shared_seq([]))
         self._last_cmd_time: float = 0.0
         # Last known lamp state from the lamp's own 0xDB status pushes (the
         # lamp notifies after every mesh write, incl. group broadcasts fed in
@@ -248,21 +307,18 @@ class DaemonSession:
 
         if raw is not None and len(raw) >= 3:
             seen_seq = int.from_bytes(raw[0:3], "little")
-            ours = self.ctrl.seq_manager.seq
+            ours = _shared_seq().seq
             if seen_seq > ours:
                 # Lamps can advance their seq independently (phone app in the
                 # mesh, mesh re-key after app control). Our next sends would
                 # be silently dropped as "already seen" (dedup window ±0x3F)
-                # — jump ahead of the lamp's counter at once.
-                self.ctrl.seq_manager = SequenceManager(initial=seen_seq)
-                try:
-                    registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
-                    self.lamp["last_seq"] = self.ctrl.seq_manager.seq
-                except Exception:
-                    pass
+                # — jump the SHARED counter ahead of the lamp's counter at
+                # once so no session lags behind.
+                _shared_seq().advance_to(seen_seq)
+                _persist_shared_seq()
                 if os.environ.get("TELINK_DEBUG_STATE"):
                     print(f"  [{self.lamp.get('name', self.lamp['mac'])}] seq "
-                          f"{ours} -> {self.ctrl.seq_manager.seq} (lamp ahead)", flush=True)
+                          f"{ours} -> {_shared_seq().seq} (lamp ahead)", flush=True)
 
         entry["ts"] = round(time.time(), 3)
         old = self.state_cache
@@ -400,11 +456,7 @@ class DaemonSession:
                     await self._read_status_char()  # liveness proof
                     await self._confirm_push(push_before, opcode, params, address)
                     self._last_cmd_time = asyncio.get_event_loop().time()
-                    try:
-                        registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
-                        self.lamp["last_seq"] = self.ctrl.seq_manager.seq
-                    except Exception:
-                        pass
+                    _persist_shared_seq()
                     return
                 except Exception as err:
                     last_error = err
@@ -442,15 +494,11 @@ class DaemonSession:
             return
         if time.time() - float(st["ts"]) < _PUSH_STALE_S:
             return
-        ours = self.ctrl.seq_manager.seq
-        self.ctrl.seq_manager = SequenceManager(initial=(ours + _SEQ_BUMP) & 0xFFFFFF)
-        try:
-            registry.update_seq(registry.load(), self.lamp["mac"], self.ctrl.seq_manager.seq)
-            self.lamp["last_seq"] = self.ctrl.seq_manager.seq
-        except Exception:
-            pass
+        ours = _shared_seq().seq
+        _shared_seq().advance_to((ours + _SEQ_BUMP) & 0xFFFFFF)
+        _persist_shared_seq()
         print(f"  [{self.lamp.get('name', self.lamp['mac'])}] seq pre-bump "
-              f"{ours} -> {self.ctrl.seq_manager.seq} (push stale)", flush=True)
+              f"{ours} -> {_shared_seq().seq} (push stale)", flush=True)
 
     async def _confirm_push(self, push_before: int, opcode: int, params: bytes,
                             address: int) -> None:
@@ -558,15 +606,15 @@ class DaemonSession:
         # NOTE: the caller must already hold the global adapter lock OR the
         # session lock (all current callers do); _ADAPTER_LOCK is always a
         # leaf here, so lock ordering stays deadlock-free.
-        saved_seq = self.ctrl.seq_manager
+        # The shared sno source survives reconnects by design (it is not
+        # per-controller), so no seq preservation dance is needed.
         await self._safe_disconnect()
         self.ctrl = TelinkController(
             self.lamp["mac"], self.lamp["name"], self.lamp["password"],
-            initial_seq=self.lamp.get("last_seq")
+            initial_seq=self.lamp.get("last_seq"),
+            on_plain=self.note_plain,
+            seq_manager=_init_shared_seq([]),
         )
-        # preserve monotonic seq across reconnects
-        if saved_seq.seq != self.ctrl.seq_manager.seq:
-            self.ctrl.seq_manager = saved_seq
         # Hard-bounded: login()'s GATT ops carry no timeout of their own and
         # BlueZ can hang inside them forever. An unbounded hang here (while
         # holding the global adapter lock) froze the entire command path and
@@ -860,6 +908,7 @@ async def _handle_client_inner(
 async def _build_sessions() -> dict[str, DaemonSession]:
     """Connect to every lamp in the registry, returning live sessions."""
     lamps = registry.load()
+    _init_shared_seq(lamps)
     sessions: dict[str, DaemonSession] = {
         lamp["mac"].upper(): DaemonSession(lamp) for lamp in lamps
     }

@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.7.4 - 2026-09-21 (shared sno + surviving push callback)
+- ROOT CAUSE of the confirm-failure pandemic: `_reconnect()` rebuilt the
+  controller WITHOUT `on_plain`, so every rebuilt session permanently
+  stopped decoding pushes and every later unicast confirm failed (group
+  sends skip confirmation, queries/keepalive use the controller queue —
+  which is why only unicast confirms died). Callbacks now survive
+  reconnects.
+- Single process-wide sno source: mesh packets carry no source address,
+  so per-session counters interleaved and lagging sessions' commands were
+  dropped as replays forever. Shared monotone counter, max-merged to the
+  registry on every send.
+
 ## 1.7.3 - 2026-09-21 (probe-before-rebuild + quarantine)
 - `is_connected=False` no longer triggers an immediate rebuild: a bounded
   GATT-read probe checks ground truth first ("false alarm, link alive" vs

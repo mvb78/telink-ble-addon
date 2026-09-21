@@ -336,13 +336,19 @@ def get_scanner() -> ScannerService:
 
 class TelinkController:
     def __init__(self, mac: str, name: str, password: str, initial_seq: int | None = None,
-                 on_plain=None):
+                 on_plain=None, seq_manager=None):
         self.mac = mac.upper()
         self.name = name
         self.password = password
         self.mac_bytes = bytes.fromhex(mac.replace(":", ""))
         self.client = None
-        self.seq_manager = SequenceManager(initial=initial_seq)
+        # Shared process-wide sno source (daemon passes one in): mesh packets
+        # carry no source address, so lamps dedupe on the bare sno. Separate
+        # per-session counters interleave and lag each other, and any lagging
+        # session's packets are dropped as replays forever. A single monotone
+        # counter keeps every packet above every lamp's window.
+        self.seq_manager = seq_manager if seq_manager is not None \
+            else SequenceManager(initial=initial_seq)
         # Optional callback for decrypted notification frames (daemon state
         # cache). First arg: decrypted plaintext frame; optional second arg:
         # the raw ATT notify value as received (sno/src header preserved).

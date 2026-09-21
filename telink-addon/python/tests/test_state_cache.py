@@ -18,6 +18,10 @@ from telink_daemon import DaemonSession
 
 
 def make_session() -> DaemonSession:
+    # Sessions share one process-wide sno counter; reset it so tests are
+    # isolated from each other.
+    import telink_daemon as _d
+    _d._SHARED_SEQ = None
     return DaemonSession({"mac": "AA:BB:CC:DD:EE:FF", "name": "L1", "password": "0000"})
 
 

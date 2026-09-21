@@ -23,6 +23,19 @@ class SequenceManager:
             self.seq = 1
         return value
 
+    def advance_to(self, floor: int) -> int:
+        """Forward-only jump so the next sno exceeds `floor`.
+
+        Absolute (non-modular) comparison: we never wrap voluntarily, and a
+        rewound lamp window can only be escaped by moving strictly forward.
+        Returns the new current sno."""
+        floor = int(floor) & 0xFFFFFF
+        if floor >= self.seq:
+            self.seq = floor + 1
+            if self.seq > 0xFFFFFF:
+                self.seq = 1
+        return self.seq
+
 
 def build_mesh_packet(seq: int, address: int, opcode: int, params: bytes) -> bytes:
     if len(params) > 10:
