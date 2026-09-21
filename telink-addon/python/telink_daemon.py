@@ -637,10 +637,22 @@ async def _handle_client(
     sessions: dict[str, DaemonSession],
 ):
     try:
-        async with _request_sem():
+        try:
+            await asyncio.wait_for(_request_sem().acquire(), timeout=10.0)
+        except asyncio.TimeoutError:
+            try:
+                writer.write((json.dumps(
+                    {"status": "error", "msg": "server busy, retry"}) + "\n").encode())
+                await writer.drain()
+            except Exception:
+                pass
+            return
+        try:
             await asyncio.wait_for(
                 _handle_client_inner(reader, writer, sessions),
                 timeout=_REQUEST_TIMEOUT_S)
+        finally:
+            _request_sem().release()
     except (asyncio.TimeoutError, asyncio.CancelledError):
         try:
             writer.close()

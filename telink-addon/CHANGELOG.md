@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.6.13 - 2026-09-21 (fail-fast semaphore acquisition)
+- 10 s timeout on semaphore acquire with "server busy" response; no request
+  queues forever behind stuck BLE operations.
+
 ## 1.6.12 - 2026-09-20 (request self-defense)
 - `_handle_client` split: semaphore(8) + 30 s `wait_for` + guaranteed close
   on every path. No request can pile up sockets behind a wedged BLE op.

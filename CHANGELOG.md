@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.6.13 - 2026-09-21 (fail-fast semaphore acquisition)
+- Semaphore acquire wrapped in a 10 s timeout returning "server busy" so
+  state reads and new requests never queue indefinitely behind stuck BLE
+  ops (observed: 16 s state reads during reconnect storms).
+
 ## 1.6.12 - 2026-09-20 (request self-defense: semaphore + 30 s cap)
 - API requests now run at most 8 concurrent with a 30 s lifetime cap, and
   the socket is closed on every path. Diagnosed live: 963 leaked CLOSE_WAIT
