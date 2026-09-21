@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1 - 2026-09-21 (synchronous close order stops BLE FD leak)
+- `TelinkController.disconnect()` cancels the monitor task (without
+  awaiting), closes the monitor socket synchronously, THEN does the bounded
+  remote disconnect. A timeout-cancelled disconnect previously orphaned
+  not-yet-closed HCI/BLE sockets (~200/hour live).
+
 ## 1.7.0 - 2026-09-21 (persistent scanner — no more per-connect scans)
 - New `ScannerService`: one long-lived BleakScanner per process with a live
   device table; `connect()` waits on the table instead of starting/stopping

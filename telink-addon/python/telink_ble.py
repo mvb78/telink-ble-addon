@@ -423,21 +423,27 @@ class TelinkController:
         await asyncio.sleep(0.5)
 
     async def disconnect(self):
-        if self._monitor_task:
-            self._monitor_task.cancel()
+        # Close order is load-bearing for FD hygiene: synchronous closes
+        # FIRST (monitor task cancel + socket close cannot hang), then the
+        # bounded remote disconnect. A timeout-cancelled disconnect must
+        # never orphan open sockets — that leaked ~200 FDs in an hour live
+        # (every abandoned controller kept its HCI monitor + BLE sockets).
+        task, self._monitor_task = self._monitor_task, None
+        if task:
+            task.cancel()  # loop exits on its own; never awaited here
+        sock, self._monitor_sock = self._monitor_sock, None
+        if sock:
             try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-            self._monitor_task = None
-        if self._monitor_sock:
-            try:
-                self._monitor_sock.close()
+                sock.close()
             except Exception:
                 pass
-            self._monitor_sock = None
-        if self.client and self.client.is_connected:
-            await self.client.disconnect()
+        client, self.client = self.client, None
+        if client:
+            try:
+                if client.is_connected:
+                    await asyncio.wait_for(client.disconnect(), timeout=8.0)
+            except Exception:
+                pass
 
     async def _hci_monitor_loop(self):
         """
@@ -463,7 +469,10 @@ class TelinkController:
         buf = b""
         while True:
             try:
-                chunk = await asyncio.to_thread(self._monitor_sock.recv, 4096)
+                sock = self._monitor_sock
+                if sock is None:
+                    return  # torn down by disconnect()
+                chunk = await asyncio.to_thread(sock.recv, 4096)
                 buf += chunk
             except asyncio.CancelledError:
                 return
