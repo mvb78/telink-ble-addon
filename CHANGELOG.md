@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.7 - 2026-09-21 (pre-send drain kills phantom confirms)
+- Drain the notification queue before the command double-send so delayed
+  relay duplicates of older pushes cannot confirm the new command.
+- OTA learning: 0xE0 unicast rebind restores rotted address tables
+  (E9/A5/7C/54/BC/B3 all recovered this way; broadcast always worked).
+
 ## 1.7.6 - 2026-09-21 (patient confirmation for slow flood mesh)
 - Push wait 3 s -> 6 s; fallback status-query verification retries up to
   3 rounds. The flood mesh delivers seconds late via relays; the old

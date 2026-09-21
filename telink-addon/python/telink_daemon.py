@@ -464,6 +464,13 @@ class DaemonSession:
                             self._keepalive_loop()
                         )
                     self._maybe_bump_seq()
+                    # Start from a clean queue: delayed relay duplicates of
+                    # older pushes must not count as confirmation of THIS
+                    # command (phantom ok when stale values match).
+                    try:
+                        await self.ctrl.drain_notifications(duration=0.3)
+                    except Exception:
+                        pass
                     push_before = self._push_count
                     await self.ctrl.send_command(opcode, params, address)
                     await asyncio.sleep(0.2)
