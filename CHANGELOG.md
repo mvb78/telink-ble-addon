@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.7.3 - 2026-09-21 (probe-before-rebuild + quarantine)
+- `is_connected=False` no longer triggers an immediate rebuild: a bounded
+  GATT-read probe checks ground truth first ("false alarm, link alive" vs
+  rebuild). Kills the false-rebuild storms when bleak reports stale state.
+- Keepalive no longer tears down healthy links on transient send errors;
+  rebuilds only when the link is really down.
+- `TELINK_QUARANTINE_MACS`: quarantined lamps (68:EC:62:02:87:A5 — output
+  stage dead, survives power-cycle) fail commands fast instead of burning
+  global-lock rebuilds that wedge the healthy lamps.
+
 ## 1.7.2 - 2026-09-21 (reconnect-reason logging)
 - Log-only: every `_reconnect()` trigger now prints its reason
   (send-path pre-check / send-attempt failure / keepalive pre-check) to

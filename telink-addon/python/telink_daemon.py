@@ -45,6 +45,13 @@ PAUSE_FILE = os.path.join(os.environ.get("TELINK_DATA_DIR", "/data"), "daemon_pa
 TCP_HOST = os.environ.get("TELINK_DAEMON_HOST")
 TCP_PORT = int(os.environ.get("TELINK_DAEMON_PORT", "8097"))
 _KEEPALIVE_INTERVAL = 28.0  # seconds idle before sending keepalive
+# Lamps with known-bad outputs (actuate nothing, never push): commands fail
+# fast instead of burning global-lock rebuilds that wedge the healthy lamps.
+_QUARANTINE_MACS = {m.strip().upper() for m in
+                    os.environ.get("TELINK_QUARANTINE_MACS", "").split(",")
+                    if m.strip()}
+# Bound for the is_connected ground-truth probe (GATT read). Exceeding it
+# means the link is really dead -> rebuild as before.
 _STATUS_PARAMS = bytes([0x10] + [0] * 9)
 _MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
 # Release a lamp's connection after this many seconds without a command. Telink
@@ -320,6 +327,22 @@ class DaemonSession:
             timeout=_LINK_VERIFY_TIMEOUT,
         )
 
+    @property
+    def _quarantined(self) -> bool:
+        return str(self.lamp.get("mac", "")).upper() in _QUARANTINE_MACS
+
+    async def _probe_alive(self) -> bool:
+        """Ground truth for a suspect link: bleak's is_connected can report
+        False on a healthy link (stale D-Bus state after adapter hiccups),
+        and rebuilding such a link burns a global-lock scan that kills
+        neighbor links. A cheap GATT read proves liveness; callers must
+        hold the session lock. Never raises."""
+        try:
+            await self._read_status_char()
+            return True
+        except Exception:
+            return False
+
     async def _safe_disconnect(self) -> None:
         """Disconnect with a hard timeout.
 
@@ -351,10 +374,20 @@ class DaemonSession:
             last_error: Exception | None = None
             for attempt in range(1, _SEND_ATTEMPTS + 1):
                 try:
-                    if not self.ctrl.client or not self.ctrl.client.is_connected:
-                        print(f"  [{self.lamp['name']}] send-path pre-check: "
-                              f"is_connected=False -> rebuilding", flush=True)
+                    if self.ctrl.client is None:
                         await self._reconnect(spawn_keepalive=False)
+                    elif not self.ctrl.client.is_connected:
+                        # Suspect link: verify before rebuilding. A GATT read
+                        # is ground truth; the attempt below (write+read+
+                        # confirm) is the final arbiter, and the retry path
+                        # rebuilds on genuine failure.
+                        if await self._probe_alive():
+                            print(f"  [{self.lamp['name']}] send-path pre-check "
+                                  f"false alarm, link alive", flush=True)
+                        else:
+                            print(f"  [{self.lamp['name']}] send-path pre-check: "
+                                  f"is_connected=False -> rebuilding", flush=True)
+                            await self._reconnect(spawn_keepalive=False)
                     if self._keepalive_task is None or self._keepalive_task.done():
                         self._keepalive_task = asyncio.get_event_loop().create_task(
                             self._keepalive_loop()
@@ -375,6 +408,13 @@ class DaemonSession:
                     return
                 except Exception as err:
                     last_error = err
+                    if self._quarantined:
+                        # Known-bad output stage: never actuates, never
+                        # pushes. Fail fast instead of burning global-lock
+                        # rebuilds that wedge the healthy lamps.
+                        print(f"  [{self.lamp['name']}] quarantined, failing "
+                              f"fast ({type(err).__name__})", flush=True)
+                        raise last_error
                     if attempt < _SEND_ATTEMPTS:
                         print(f"  [{self.lamp['name']}] send attempt {attempt} "
                               f"failed ({type(err).__name__}: {err}) -> rebuilding",
@@ -560,11 +600,18 @@ class DaemonSession:
                 continue
             try:
                 async with self._lock, _ADAPTER_LOCK:
-                    if not self.ctrl.client or not self.ctrl.client.is_connected:
-                        print(f"  [{self.lamp['name']}] keepalive pre-check: "
-                              f"is_connected=False -> rebuilding", flush=True)
+                    if self.ctrl.client is None:
                         await self._reconnect(spawn_keepalive=False)
                         continue
+                    if not self.ctrl.client.is_connected:
+                        if await self._probe_alive():
+                            print(f"  [{self.lamp['name']}] keepalive pre-check "
+                                  f"false alarm, link alive", flush=True)
+                        else:
+                            print(f"  [{self.lamp['name']}] keepalive pre-check: "
+                                  f"is_connected=False -> rebuilding", flush=True)
+                            await self._reconnect(spawn_keepalive=False)
+                            continue
                     await self.ctrl.send_command(0xDA, _STATUS_PARAMS, 0xFFFF)
                     # Health check: the lamp pushes its own 0xDB on the keepalive.
                     # No reply two keepalives in a row -> drop the link so the
@@ -582,11 +629,20 @@ class DaemonSession:
                         failed = 0
                     self._last_cmd_time = loop.time()
             except Exception:
-                # Link error: drop it so the next command reconnects.
+                # Link error: rebuild only a link that is really down. An
+                # earlier unconditional teardown here killed healthy links on
+                # transient send errors, feeding the reconnect churn.
                 try:
-                    await self.ctrl.disconnect()
+                    if self.ctrl.client is None or not self.ctrl.client.is_connected:
+                        await self._reconnect(spawn_keepalive=False)
+                    else:
+                        print(f"  [{self.lamp['name']}] keepalive transient "
+                              f"error, link alive", flush=True)
                 except Exception:
-                    pass
+                    try:
+                        await self.ctrl.disconnect()
+                    except Exception:
+                        pass
 
 
 def _resolve_targets(
