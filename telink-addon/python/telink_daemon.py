@@ -213,6 +213,17 @@ def _init_shared_seq(lamps: list[dict]) -> SequenceManager:
     _SHARED_SEQ = SequenceManager()
     if top:
         _SHARED_SEQ.advance_to((top + _SEQ_BUMP) & 0xFFFFFF)
+    # Absolute operator override for replay-desync recovery: the registry
+    # file can be poisoned DOWNWARD by wrapped pre-bump persists while lamp
+    # windows sit near the ceiling; start exactly here instead.
+    try:
+        forced = os.environ.get("TELINK_SEQ_START", "").strip()
+        if forced:
+            _SHARED_SEQ.seq = int(forced, 0) & 0xFFFFFF
+            if _SHARED_SEQ.seq == 0:
+                _SHARED_SEQ.seq = 1
+    except (TypeError, ValueError):
+        pass
     print(f"shared sno starts at {_SHARED_SEQ.seq} (persisted max {top})",
           flush=True)
     return _SHARED_SEQ

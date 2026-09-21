@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.5 - 2026-09-21 (TELINK_SEQ_START recovery override)
+- Absolute sno start override for replay-desync recovery (registry file
+  can be poisoned downward by wrapped pre-bump persists while lamp flash
+  windows sit near the 24-bit ceiling).
+
 ## 1.7.4 - 2026-09-21 (shared sno + surviving push callback)
 - ROOT CAUSE of the confirm-failure pandemic: `_reconnect()` rebuilt the
   controller WITHOUT `on_plain`, so every rebuilt session permanently
