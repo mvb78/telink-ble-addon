@@ -552,6 +552,10 @@ class TelinkController:
                 self._notify_queue.put_nowait(plain)
 
     async def login(self):
+        # Every GATT op bounded: a half-dead link can hang write/read with
+        # response forever, and login runs while holding the daemon's global
+        # adapter lock — one wedged login froze ALL lamp traffic for minutes.
+        _op = float(os.environ.get("TELINK_LOGIN_OP_TIMEOUT", "12.0"))
         base_key = derive_base_key(self.name, self.password)
         r1 = os.urandom(8)
         challenge = build_challenge(base_key, r1)
@@ -561,10 +565,19 @@ class TelinkController:
         payload[1:9] = r1
         payload[9:17] = challenge
 
-        await self.client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True)
+        try:
+            await asyncio.wait_for(
+                self.client.write_gatt_char(CHAR_PAIR_UUID, bytes(payload), response=True),
+                timeout=_op)
+        except asyncio.TimeoutError:
+            raise Exception(f"{self.mac} login write hung (half-dead link?)")
         await asyncio.sleep(0.5)
 
-        rsp = await self.client.read_gatt_char(CHAR_PAIR_UUID)
+        try:
+            rsp = await asyncio.wait_for(
+                self.client.read_gatt_char(CHAR_PAIR_UUID), timeout=_op)
+        except asyncio.TimeoutError:
+            raise Exception(f"{self.mac} login read hung (half-dead link?)")
         if not rsp or rsp[0] != 0x0D or len(rsp) < 17:
             raise Exception(f"Login failed: {rsp.hex() if rsp else 'no response'}")
 
@@ -578,7 +591,12 @@ class TelinkController:
 
         # Custom subscribe: writing 0x01 to the notify char VALUE (not CCCD) causes
         # the lamp to start sending ATT_NOTIFY.  CCCD writes disconnect the lamp.
-        await self.client.write_gatt_char(CHAR_NOTIFY_UUID, b'\x01', response=True)
+        try:
+            await asyncio.wait_for(
+                self.client.write_gatt_char(CHAR_NOTIFY_UUID, b'\x01', response=True),
+                timeout=_op)
+        except asyncio.TimeoutError:
+            raise Exception(f"{self.mac} subscribe hung (half-dead link?)")
 
     async def send_packet(self, packet: bytes):
         """Encrypt and write a pre-built 20-byte mesh packet to the command characteristic."""

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.10 - 2026-09-21 (bounded login GATT ops)
+- login()'s write/read/subscribe now bounded (12 s each,
+  TELINK_LOGIN_OP_TIMEOUT). A half-dead link used to hang login forever
+  while holding the global adapter lock, freezing all lamp traffic.
+
 ## 1.7.9 - 2026-09-21 (fail-fast locks, bounded maintainer)
 - Session/adapter lock acquisition is now bounded (60 s/120 s): a hung
   BLE op can no longer freeze the daemon into a living dead (idle epoll,
