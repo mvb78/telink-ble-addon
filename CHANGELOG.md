@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.8 - 2026-09-21 (fast startup, clean shutdown)
+- Startup tries each lamp once (maintainer owns retries with backoff);
+  one silent lamp no longer stalls the whole initial connect for minutes.
+- Bounded session stop (10 s): unclean restarts orphaned lamp-side
+  connections, leaving lamps silent until supervision timeout. NOT
+  DEPLOYED yet — running 1.7.7 sidecar is stable; ships on next restart.
+
 ## 1.7.7 - 2026-09-21 (pre-send drain kills phantom confirms)
 - Drain the notification queue before the command double-send so delayed
   relay duplicates of older pushes cannot confirm the new command.

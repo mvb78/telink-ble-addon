@@ -53,7 +53,7 @@ _QUARANTINE_MACS = {m.strip().upper() for m in
 # Bound for the is_connected ground-truth probe (GATT read). Exceeding it
 # means the link is really dead -> rebuild as before.
 _STATUS_PARAMS = bytes([0x10] + [0] * 9)
-_MAX_START_ATTEMPTS = 3  # serial connect retries per lamp at startup
+_MAX_START_ATTEMPTS = 1  # startup tries each lamp once; the maintainer owns retries
 # Release a lamp's connection after this many seconds without a command. Telink
 # mesh lamps stop advertising while connected, so holding sessions forever can
 # strand them in a silent state. TELINK_IDLE_TIMEOUT=0 (or negative) keeps the
@@ -381,8 +381,11 @@ class DaemonSession:
                 await self._keepalive_task
             except asyncio.CancelledError:
                 pass
+        # Bounded: an unclean restart orphans the lamp-side connection and
+        # the lamp then stays silent (no advertising) until its supervision
+        # timeout fires. Never hold SIGTERM past the container stop budget.
         try:
-            await self.ctrl.disconnect()
+            await asyncio.wait_for(self.ctrl.disconnect(), timeout=10.0)
         except Exception:
             pass
 
