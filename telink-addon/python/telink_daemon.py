@@ -352,6 +352,8 @@ class DaemonSession:
             for attempt in range(1, _SEND_ATTEMPTS + 1):
                 try:
                     if not self.ctrl.client or not self.ctrl.client.is_connected:
+                        print(f"  [{self.lamp['name']}] send-path pre-check: "
+                              f"is_connected=False -> rebuilding", flush=True)
                         await self._reconnect(spawn_keepalive=False)
                     if self._keepalive_task is None or self._keepalive_task.done():
                         self._keepalive_task = asyncio.get_event_loop().create_task(
@@ -374,6 +376,9 @@ class DaemonSession:
                 except Exception as err:
                     last_error = err
                     if attempt < _SEND_ATTEMPTS:
+                        print(f"  [{self.lamp['name']}] send attempt {attempt} "
+                              f"failed ({type(err).__name__}: {err}) -> rebuilding",
+                              flush=True)
                         try:
                             # drop the dead link first so _reconnect rebuilds
                             await self._safe_disconnect()
@@ -556,6 +561,8 @@ class DaemonSession:
             try:
                 async with self._lock, _ADAPTER_LOCK:
                     if not self.ctrl.client or not self.ctrl.client.is_connected:
+                        print(f"  [{self.lamp['name']}] keepalive pre-check: "
+                              f"is_connected=False -> rebuilding", flush=True)
                         await self._reconnect(spawn_keepalive=False)
                         continue
                     await self.ctrl.send_command(0xDA, _STATUS_PARAMS, 0xFFFF)

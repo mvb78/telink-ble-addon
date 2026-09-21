@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.2 - 2026-09-21 (reconnect-reason logging)
+- Log-only: every `_reconnect()` trigger now prints its reason
+  (send-path pre-check / send-attempt failure / keepalive pre-check) to
+  distinguish flaky `is_connected` from genuine link drops.
+
 ## 1.7.1 - 2026-09-21 (synchronous close order stops BLE FD leak)
 - `TelinkController.disconnect()` cancels the monitor task (without
   awaiting), closes the monitor socket synchronously, THEN does the bounded
