@@ -275,7 +275,8 @@ class TelinkGroupLight(_TelinkBaseLight):
         await self.coordinator.send_command(API_CMD_SET, payload)
         self._on = True
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
+        await asyncio.sleep(3)
+        await self.coordinator.async_refresh_state_cache()
         await self._sync_members(on=True, brightness_ha=self._brightness,
                                  kelvin=self._color_temp_kelvin)
         self.async_write_ha_state()
@@ -284,7 +285,8 @@ class TelinkGroupLight(_TelinkBaseLight):
         await self.coordinator.send_command(API_CMD_SET, {"dst": self._addr, "on": False})
         self._on = False
         self.async_write_ha_state()
-        await self.coordinator.async_request_refresh()
+        await asyncio.sleep(3)
+        await self.coordinator.async_refresh_state_cache()
         await self._sync_members(on=False)
         self.async_write_ha_state()
 
