@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.7.15 - 2026-09-22 (E2 broadcast reroute + verify)
+- Colortemp (0xE2) is force-routed to broadcast: bench-proven that these
+  lamps ignore addressed E2 (unicast and group) but honor broadcast E2.
+  Broadcast E2 is verified against the sending session's own lamp query
+  so failures still raise instead of phantom-ok. Per-group CT is
+  firmware-impossible; automations use one CT (3080K).
+
 ## 1.7.14 - 2026-09-21 (fix maintainer double-lock deadlock)
 - The maintainer retry wrapped sess.start() in _ADAPTER_LOCK, but
   start() acquires the same lock itself. asyncio locks are not
