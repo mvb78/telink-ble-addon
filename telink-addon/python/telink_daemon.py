@@ -476,6 +476,16 @@ class DaemonSession:
         (send or read) we reconnect and retry, up to _SEND_ATTEMPTS cycles.
         Raises on final failure so callers see ok=false instead of silence.
 
+        Colortemp (0xE2) is force-routed to broadcast: bench-proven
+        2026-09-22 that these lamps ignore addressed E2 (unicast AND group)
+        but honor broadcast E2. Per-group CT is firmware-impossible, so all
+        lamps share one CT (automations use a single value).
+        """
+        if opcode == 0xE2 and int(address) != 0xFFFF:
+            print(f"  [{self.lamp['name']}] E2 -> broadcast reroute "
+                  f"(was {int(address):#06x})", flush=True)
+            address = 0xFFFF
+
         The whole attempt sequence holds the global adapter lock: this
         session's scan/connect/write/read traffic must never overlap another
         session's, or the adapter scan steals airtime and kills neighbor
@@ -517,6 +527,29 @@ class DaemonSession:
                     await self.ctrl.send_command(opcode, params, address)
                     await self._read_status_char()  # liveness proof
                     await self._confirm_push(push_before, opcode, params, address)
+                    if opcode == 0xE2:
+                        # Broadcast sends skip push confirmation by design;
+                        # verify against our own lamp's queried state so a
+                        # lost E2 still raises (and retries) instead of
+                        # reporting phantom ok.
+                        verified = False
+                        for _ in range(max(1, _PUSH_VERIFY_ROUNDS)):
+                            try:
+                                pkt = await self._query_locked(
+                                    0xDA, _STATUS_PARAMS, 0xDB, timeout=4.0)
+                            except Exception:
+                                pkt = None
+                            if pkt:
+                                entry, _seq = _decode_status_push(pkt)
+                                if entry is not None and _push_matches_command(
+                                        entry, opcode, params):
+                                    verified = True
+                                    break
+                            await asyncio.sleep(1.0)
+                        if not verified:
+                            raise TimeoutError(
+                                f"E2 broadcast not reflected by "
+                                f"{self.lamp['mac']}")
                     self._last_cmd_time = asyncio.get_event_loop().time()
                     _persist_shared_seq()
                     return
